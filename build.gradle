@@ -1,25 +1,92 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
+apply plugin: 'com.android.application'
 
-buildscript {
-    repositories {
-        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-        maven { url 'https://maven.aliyun.com/repository/jcenter' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        jcenter()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    compileSdkVersion 26
+    buildToolsVersion '25.0.0'
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_6
+        targetCompatibility JavaVersion.VERSION_1_6
     }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:2.3.2'
+
+    defaultConfig {
+        applicationId "cn.ottohub.oh2013"
+        minSdkVersion 3
+        targetSdkVersion 26
+        versionCode 132
+        versionName "0.3.2"
+
+        ndk {
+            abiFilters 'armeabi', 'armeabi-v7a', 'arm64-v8a'
+        }
+    }
+
+    signingConfigs {
+        oh2013 {
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.oh2013
+            }
+        }
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
+    applicationVariants.all { variant ->
+        if (variant.buildType.name == 'release') {
+            variant.outputs.each { output ->
+                output.outputFile = new File(
+                        output.outputFile.parent,
+                        "OH2013-${variant.versionName}.apk")
+            }
+        }
+    }
+
+    dexOptions {
+        preDexLibraries false
     }
 }
 
-allprojects {
-    repositories {
-        maven { url 'https://maven.aliyun.com/repository/jcenter' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        jcenter()
+repositories {
+    flatDir {
+        dirs 'libs'
     }
 }
 
-task clean(type: Delete) {
-    delete rootProject.buildDir
+dependencies {
+    compile fileTree(dir: 'libs', include: ['*.jar'])
+    compile project(':player')
+    compile project(':DanmakuFlameMaster')
 }
+
+tasks.withType(JavaCompile) {
+    options.incremental = false
+}
+
+task cleanBuildCache(type: Delete) {
+    delete fileTree(dir: project.buildDir, include: '**/*.dex')
+    delete fileTree(dir: project.buildDir, include: '**/*.class')
+    delete fileTree(dir: project.buildDir, include: '**/cache/**')
+}
+
+clean.dependsOn cleanBuildCache
