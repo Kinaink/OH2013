@@ -7,8 +7,6 @@
 ## 目标平台
 
 - **Android 1.5+**（API 3，Cupcake 及以上）
-- **Windows Mobile 6.0+**（规划中）
-- 不包含 webOS 3.0
 
 ## 功能概览
 
