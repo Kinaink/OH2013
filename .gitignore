@@ -1,0 +1,36 @@
+# IDE / editor
+*.iml
+.idea/
+.cursor/
+.DS_Store
+
+# Local SDK / secrets (never commit)
+/local.properties
+/keystore.properties
+/.keystore/
+
+# Build & cache
+.gradle/
+/build/
+/app/build/
+/player/build/
+/DanmakuFlameMaster/build/
+.externalNativeBuild
+/captures
+
+# Local toolchain, helper scripts & release outputs
+/.tools/
+/tools/
+/dist/
+*.apk
+*.log
+
+# Upstream reference (not part of the published source tree)
+/_ref/
+
+# Scratch / recovery scripts (local only)
+/_fix_*.py
+/_inspect.py
+/_recover_*.py
+/_recover_*.txt
+/compile_err.txt
