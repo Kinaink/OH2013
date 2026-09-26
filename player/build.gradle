@@ -1,0 +1,20 @@
+apply plugin: 'com.android.library'
+
+android {
+    compileSdkVersion 26
+    buildToolsVersion '25.0.0'
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_5
+        targetCompatibility JavaVersion.VERSION_1_5
+    }
+
+    defaultConfig {
+        minSdkVersion 3
+        targetSdkVersion 26
+    }
+
+    sourceSets.main {
+        jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+}
