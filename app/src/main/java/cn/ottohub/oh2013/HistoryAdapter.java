@@ -1,0 +1,273 @@
+package cn.ottohub.oh2013;
+
+
+import cn.ottohub.oh2013.util.NetWorkUtil;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
+import android.widget.ImageView;
+import android.widget.TextView;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+import cn.ottohub.oh2013.model.VideoCard;
+import cn.ottohub.oh2013.util.GlobalImageCache;
+import cn.ottohub.oh2013.util.SharedPreferencesUtil;
+
+public class HistoryAdapter extends BaseAdapter {
+
+    private Context context;
+    private List<VideoCard> list;
+    private ExecutorService executor;
+    private Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private Map<Integer, Boolean> loadingMap = new HashMap<Integer, Boolean>();
+    private boolean isScrolling = false;
+    private final java.util.ArrayList<Runnable> pendingBitmapSets = new java.util.ArrayList<Runnable>();
+
+    // 遥控器方向键选中的条目（-1 = 未选中），用于整行高亮
+    private int selectedPosition = -1;
+    // 触摸滑动中是否隐藏光标高亮（滑动时隐藏，再次按键时恢复）
+    private boolean mHideHighlight = false;
+
+    public void setSelectedPosition(int position) {
+        this.selectedPosition = position;
+        notifyDataSetChanged();
+    }
+
+    public void setHideHighlight(boolean hide) {
+        if (this.mHideHighlight == hide) {
+            return;
+        }
+        this.mHideHighlight = hide;
+        notifyDataSetChanged();
+    }
+
+    private boolean isLowMemoryDevice() {
+        int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
+        return maxMemory < 24576;
+    }
+
+    private int getConfiguredThreadCount() {
+        return cn.ottohub.oh2013.util.SdkHelper.getImageLoadThreads();
+    }
+
+    private void initExecutor() {
+        if (executor != null && !executor.isShutdown()) {
+            executor.shutdownNow();
+        }
+
+        int threadCount = getConfiguredThreadCount();
+        if (threadCount <= 1) {
+            executor = Executors.newSingleThreadExecutor();
+        } else {
+            executor = new ThreadPoolExecutor(threadCount, threadCount, 60L, TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<Runnable>());
+        }
+    }
+
+    public HistoryAdapter(Context context, List<VideoCard> list) {
+        this.context = context;
+        this.list = list;
+        initExecutor();
+    }
+
+    public void setScrolling(boolean scrolling) {
+        this.isScrolling = scrolling;
+        if (!scrolling) {
+            flushPendingBitmapSets();
+        }
+    }
+
+    private void flushPendingBitmapSets() {
+        if (pendingBitmapSets.isEmpty()) return;
+        final java.util.ArrayList<Runnable> pending = new java.util.ArrayList<Runnable>(pendingBitmapSets);
+        pendingBitmapSets.clear();
+        // 分批应用（每帧最多 2 张），避免停下瞬间一次性 setImageBitmap 全部封面造成整帧卡顿
+        final int[] idx = {0};
+        final Runnable drain = new Runnable() {
+            @Override
+            public void run() {
+                if (executor == null || executor.isShutdown()) {
+                    return;
+                }
+                int applied = 0;
+                while (idx[0] < pending.size() && applied < 2) {
+                    try {
+                        pending.get(idx[0]).run();
+                    } catch (Throwable t) {
+                    }
+                    idx[0]++;
+                    applied++;
+                }
+                if (idx[0] < pending.size()) {
+                    mainHandler.postDelayed(this, 16);
+                }
+            }
+        };
+        drain.run();
+    }
+
+    public void reloadExecutor() {
+        initExecutor();
+    }
+
+    @Override
+    public int getCount() {
+        return list.size();
+    }
+
+    @Override
+    public Object getItem(int position) {
+        return list.get(position);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        return position;
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+        ViewHolder holder;
+
+        if (convertView == null) {
+            convertView = LayoutInflater.from(context).inflate(R.layout.history_item, parent, false);
+            holder = new ViewHolder();
+            holder.title = (TextView) convertView.findViewById(R.id.title);
+            holder.upName = (TextView) convertView.findViewById(R.id.up_name);
+            holder.progress = (TextView) convertView.findViewById(R.id.progress);
+            holder.cover = (ImageView) convertView.findViewById(R.id.cover);
+            convertView.setTag(holder);
+        } else {
+            holder = (ViewHolder) convertView.getTag();
+        }
+
+        final VideoCard item = list.get(position);
+        final int currentPos = position;
+
+        // 遥控器光标高亮（选中：半透明粉色；未选中：恢复原点击效果背景）
+        // 触摸滑动时隐藏高亮（mHideHighlight），避免光标与手指位置混淆
+        if (position == selectedPosition && !mHideHighlight) {
+            convertView.setBackgroundColor(0x66FF8C00);
+        } else {
+            try {
+                convertView.setBackgroundDrawable(
+                        convertView.getResources().getDrawable(R.drawable.item_click_effect_white));
+            } catch (Exception e) {
+                convertView.setBackgroundColor(0xFFFFFFFF);
+            }
+        }
+
+        holder.title.setText(item.title);
+        holder.upName.setText(item.upName);
+        if (holder.progress != null) {
+            holder.progress.setVisibility(View.GONE);
+        }
+
+        float density = context.getResources().getDisplayMetrics().density;
+        int coverW = (int) (76 * density + 0.5f);
+        int coverH = (int) (56 * density + 0.5f);
+        holder.cover.setImageResource(R.drawable.bili_default_image_tv_with_bg);
+        if (item.cover != null && item.cover.length() > 0) {
+            cn.ottohub.oh2013.util.CoverImageLoader.loadInto(context, holder.cover, item.cover, coverW, coverH);
+        }
+
+        final int pos = position;
+        final VideoCard clickItem = item;
+        convertView.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (context instanceof HistoryActivity) {
+                    ((HistoryActivity) context).onHistoryClick(clickItem, pos);
+                }
+            }
+        });
+
+        return convertView;
+    }
+
+    private Bitmap downloadImage(String urlStr) {
+        if (SharedPreferencesUtil.getBoolean(SharedPreferencesUtil.NO_IMAGE_MODE, false)) return null;
+        HttpURLConnection conn = null;
+        java.io.File tempFile = null;
+        try {
+            if (urlStr != null && urlStr.startsWith("https://")) {
+                urlStr = "http://" + urlStr.substring(8);
+            }
+
+            conn = NetWorkUtil.openCompat(urlStr);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setRequestProperty("Accept-Encoding", "identity");
+            conn.connect();
+
+            tempFile = new java.io.File(context.getCacheDir(), "his_" + urlStr.hashCode() + ".tmp");
+            InputStream is = conn.getInputStream();
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(tempFile);
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = is.read(buffer)) != -1) {
+                fos.write(buffer, 0, len);
+            }
+            is.close();
+            fos.close();
+
+            if (!tempFile.exists() || tempFile.length() == 0) return null;
+
+            // 按实际显示尺寸解码（封面 76x56dp），1:1 绘制无需软件缩放滤镜
+            float density = context.getResources().getDisplayMetrics().density;
+            return GlobalImageCache.decodeFileSafely(tempFile,
+                    (int) (76 * density + 0.5f), (int) (56 * density + 0.5f), 2);
+        } catch (OutOfMemoryError e) {
+            // 不显式 System.gc()
+            return null;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (conn != null) {
+                try { conn.disconnect(); } catch (Exception e) {}
+            }
+            if (tempFile != null && tempFile.exists()) {
+                try { tempFile.delete(); } catch (Exception e) {}
+            }
+        }
+    }
+
+    public void updateData(List<VideoCard> newList) {
+        this.list = newList;
+        loadingMap.clear();
+        notifyDataSetChanged();
+    }
+
+    public void clearCache() {
+        pendingBitmapSets.clear();
+        loadingMap.clear();
+    }
+
+    static class ViewHolder {
+        TextView title;
+        TextView upName;
+        TextView progress;
+        ImageView cover;
+    }
+}

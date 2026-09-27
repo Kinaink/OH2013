@@ -1,0 +1,2419 @@
+package cn.ottohub.oh2013;
+
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentManager;
+import android.support.v4.app.FragmentPagerAdapter;
+import android.support.v4.view.PagerTabStrip;
+import android.support.v4.view.ViewPager;
+import android.view.View;
+import android.view.KeyEvent;
+import android.view.ViewGroup;
+import android.view.Gravity;
+import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ListView;
+import android.widget.RadioGroup;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+import android.util.Log;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import cn.ottohub.oh2013.api.BangumiApi;
+import cn.ottohub.oh2013.api.FavoriteApi;
+import cn.ottohub.oh2013.api.InteractionApi;
+import cn.ottohub.oh2013.util.NetWorkUtil;
+import cn.ottohub.oh2013.util.ReplyHelper;
+import cn.ottohub.oh2013.api.ReplyApi;
+import cn.ottohub.oh2013.api.VideoInfoApi;
+import cn.ottohub.oh2013.download.VideoDownloadService;
+import cn.ottohub.oh2013.download.VideoDownloadEnvironment;
+import cn.ottohub.oh2013.util.BroadcastConstants;
+import cn.ottohub.oh2013.model.FavoriteFolder;
+import cn.ottohub.oh2013.model.VideoInfo;
+import cn.ottohub.oh2013.util.PermissionUtil;
+import cn.ottohub.oh2013.util.DialogUtil;
+import cn.ottohub.oh2013.util.KeyBindingUtil;
+import cn.ottohub.oh2013.util.SharedPreferencesUtil;
+
+public class VideoDetailActivity extends BaseActivity {
+
+    private ViewPager viewPager;
+    private long aid;
+    private String bvid;
+    private VideoDetailFragment videoDetailFragment;
+    private boolean fragmentReady = false;
+    private long mResolvedAidFromBvid = 0L;
+    private TextView tvAvid;
+    private Handler cleanupHandler = new Handler();
+    private boolean isCleaned = false;
+    private int currentPagePosition = 0;
+
+    // 番剧相关
+    private boolean isBangumi = false;
+    private long epid = -1;
+    private long mBangumiMediaId = 0;
+    private boolean fromBangumi = false;
+    private boolean mOfflineMode;
+
+    // 下载对话框数据
+    private List<VideoDetailFragment.VideoPage> mPages;
+    private List<VideoDetailFragment.VideoPage> mCachedPages;
+    private boolean[] mPageChecked;
+    private int mSelectedQuality = 64;
+    private String mSelectedQualityName = "";
+    private AlertDialog mDownloadDialog;
+
+    // 收藏相关
+    private boolean mIsFavorited = false;
+    private boolean mIsLiked = false;
+    private ImageView btnFavorite;
+    private TextView btnLikeText;
+    private TextView btnFavoriteText;
+    private boolean mIsFavoriteLoading = false;
+    private boolean mIsFavoriteUpdating = false;
+    private boolean mIsDeleteDialogShowing = false;
+    private boolean mIsPausingForTransient = false;
+
+    public void setPausingForTransient(boolean pausing) {
+        mIsPausingForTransient = pausing;
+    }
+
+    // 评论相关
+    private ImageView btnComment;
+    private ArrayList<String> pendingImageDataList = new ArrayList<String>();
+    private static final int MAX_COMMENT_IMAGES = 9;
+    private TextView dialogImageBtn = null;
+    private static final int REQUEST_PICK_COMMENT_IMAGE = 2001;
+
+    // ===== 焦点光标系统 =====
+    // 视频详情页按键交互模型（Nokia 功能机范式）：
+    //   方向键循环：返回 → 播放 → UP主 → 标签 → 分P（内容区操作）；
+    //   左软键：呼出"操作菜单"（下载/评论/收藏/分享/三连）；
+    //   右软键：返回（finish）；
+    //   数字键 1：上一个 Tab；数字键 3：下一个 Tab；
+    //   确认键：触发当前焦点项（标签→列表对话框；分P→进入分P浏览模式）；
+    // 通过 dispatchKeyEvent 在事件分发给 ViewPager/View 树之前处理。
+    private final java.util.List<View> mFocusableViews = new java.util.ArrayList<View>();
+    private final java.util.HashMap<View, Drawable> mOriginalBackgrounds =
+            new java.util.HashMap<View, Drawable>();
+    private int mFocusIndex = -1;
+    private boolean mPartBrowsing = false; // 分P浏览模式
+    // 是否已用遥控器按键导航过（触屏用户未按键时不高亮任何焦点项，避免按钮外观被改写）
+    private boolean mKeyNavActive = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_video_detail);
+        initRoundTitleBar();
+
+        findViewById(R.id.btn_back).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                finish();
+            }
+        });
+
+        mOfflineMode = getIntent().getBooleanExtra("offline_mode", false);
+        fromBangumi = getIntent().getBooleanExtra("from_bangumi", false);
+
+        PagerTabStrip tabStrip = (PagerTabStrip) findViewById(R.id.pager_tab_strip);
+        if (tabStrip != null) {
+            tabStrip.setTabIndicatorColor(0xFFFFB366);
+            tabStrip.setBackgroundColor(0xFFFF8C00);
+            tabStrip.setTextColor(0xFFFFFFFF);
+            applyTabTextSize(tabStrip);
+        }
+
+        Intent intent = getIntent();
+        Uri data = intent.getData();
+
+        aid = 0L;
+        bvid = null;
+
+        if (data != null) {
+            parseExternalUri(data);
+        } else {
+            aid = intent.getLongExtra("aid", 0L);
+            bvid = intent.getStringExtra("bvid");
+        }
+
+        if (aid == 0L && (bvid == null || bvid.length() == 0)) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_89c6_1), Toast.LENGTH_SHORT).show();
+            finish();
+            return;
+        }
+
+        if (aid == 0L && bvid != null && bvid.length() > 0) {
+            final String fBvid = bvid;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        final long resolved = FavoriteApi.getAidByBvid(fBvid);
+                        if (resolved != 0L) {
+                            mResolvedAidFromBvid = resolved;
+                            aid = resolved;
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }).start();
+        }
+
+        tvAvid = (TextView) findViewById(R.id.tv_avid);
+        updateAvidDisplay();
+
+        tvAvid.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                copyAvidToClipboard();
+                return true;
+            }
+        });
+
+        // 从番剧分集点击进入（两个 Tab：视频详情 + 评论，显示 AV 号）
+        long bangumiMediaId = intent.getLongExtra("bangumi_media_id", 0);
+        if (bangumiMediaId > 0) {
+            isBangumi = false;
+            mBangumiMediaId = bangumiMediaId;
+
+            viewPager = (ViewPager) findViewById(R.id.viewpager);
+            safeSetAdapter(new TwoTabPagerAdapter(getSupportFragmentManager()));
+            viewPager.setOffscreenPageLimit(1);
+            viewPager.setOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+                @Override
+                public void onPageSelected(int position) {
+                    currentPagePosition = position;
+                }
+            });
+
+            // 初始化底部按钮
+            initBottomButtons();
+
+            return;
+        }
+
+        // 外部点击番剧进入（番剧详情页 + 评论，显示番剧名称）
+        if (!mOfflineMode && (aid != 0 || (bvid != null && bvid.length() > 0))) {
+            if (fromBangumi) {
+                isBangumi = true;
+
+                // 先显示标题和底部按钮，ViewPager 等数据加载后由 fetchBangumiInfoFromAid 设置
+                String bangumiTitle = intent.getStringExtra("bangumi_title");
+                if (bangumiTitle != null && bangumiTitle.length() > 0) {
+                    tvAvid.setText(bangumiTitle);
+                } else {
+                    tvAvid.setText(getString(R.string.videodetailactivity_settext_756a));
+                }
+                initBottomButtons();
+                fetchBangumiInfoFromAid(aid);
+                return;
+            }
+            // 无法预知是否为番剧，先显示标题和底部按钮，ViewPager 等 checkAndSetup 完成后设置
+            updateAvidDisplay();
+            initBottomButtons();
+            checkAndSetup();
+            return;
+        }
+
+        // 普通视频（离线模式）
+        updateAvidDisplay();
+        initNormalVideo();
+        initBottomButtons();
+    }
+
+    private void fetchBangumiInfoFromAid(final long aid) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    VideoInfo info = VideoInfoApi.getVideoInfo(aid);
+                    if (info != null && info.epid > 0) {
+                        epid = info.epid;
+                        BangumiApi.SeasonInfo seasonInfo = BangumiApi.getSeasonInfoFromEpid(epid);
+                        Log.d("Bangumi", "aid=" + aid + ", epid=" + epid +
+                                ", seasonId=" + (seasonInfo != null ? seasonInfo.seasonId : 0) +
+                                ", mediaId=" + (seasonInfo != null ? seasonInfo.mediaId : 0));
+
+                        if (seasonInfo != null && seasonInfo.seasonId > 0) {
+                            mBangumiMediaId = seasonInfo.seasonId;
+                            final cn.ottohub.oh2013.model.Bangumi bangumi = BangumiApi.getBangumi(seasonInfo.seasonId);
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (bangumi != null && bangumi.info != null) {
+                                        tvAvid.setText(bangumi.info.title);
+                                        initBangumiView();
+                                        return;
+                                    }
+                                    isBangumi = false;
+                                    updateAvidDisplay();
+                                    initNormalVideo();
+                                }
+                            });
+                        } else {
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    isBangumi = false;
+                                    updateAvidDisplay();
+                                    initNormalVideo();
+                                }
+                            });
+                        }
+                    } else {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                isBangumi = false;
+                                updateAvidDisplay();
+                                initNormalVideo();
+                            }
+                        });
+                    }
+                } catch (final Exception e) {
+                    e.printStackTrace();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            isBangumi = false;
+                            updateAvidDisplay();
+                            initNormalVideo();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void checkAndSetup() {
+        final long finalAid = aid;
+        final String finalBvid = bvid;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    VideoInfo info;
+                    if (finalAid != 0) {
+                        info = VideoInfoApi.getVideoInfo(finalAid);
+                    } else {
+                        info = VideoInfoApi.getVideoInfo(finalBvid);
+                    }
+
+                    if (info == null) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                isBangumi = false;
+                                updateAvidDisplay();
+                                initNormalVideo();
+                            }
+                        });
+                        return;
+                    }
+
+                    final VideoInfo finalInfo = info;
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (finalInfo.epid > 0) {
+                                isBangumi = true;
+                                tvAvid.setText(finalInfo.title != null ? finalInfo.title : getString(R.string.videodetail_tab_bangumi));
+                                fetchBangumiInfoFromAid(finalInfo.aid);
+                            } else {
+                                isBangumi = false;
+                                updateAvidDisplay();
+                                initNormalVideo();
+                            }
+                        }
+                    });
+
+                } catch (final Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    // 番剧视图（只有两个 Tab：番剧详情 + 评论）
+    private void initBangumiView() {
+        PagerTabStrip tabStrip = (PagerTabStrip) findViewById(R.id.pager_tab_strip);
+        if (tabStrip != null) {
+            tabStrip.setTabIndicatorColor(0xFFFFB366);
+            tabStrip.setBackgroundColor(0xFFFF8C00);
+            tabStrip.setTextColor(0xFFFFFFFF);
+            applyTabTextSize(tabStrip);
+        }
+
+        viewPager = (ViewPager) findViewById(R.id.viewpager);
+        safeSetAdapter(new BangumiPagerAdapter(getSupportFragmentManager()));
+        viewPager.setOffscreenPageLimit(1);
+
+        viewPager.setOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+            @Override
+            public void onPageSelected(int position) {
+                currentPagePosition = position;
+            }
+        });
+
+        findViewById(R.id.btn_back).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                finish();
+            }
+        });
+    }
+
+    /**
+     * 手表（小屏）适配：固定 PagerTabStrip 高度 + 缩小 padding，让背景随文字变小；
+     * 手机上保持原生 wrap_content 行为。
+     */
+    private void applyTabTextSize(PagerTabStrip tabStrip) {
+        float screenWidthDp = getResources().getDisplayMetrics().widthPixels
+                / getResources().getDisplayMetrics().density;
+        if (screenWidthDp > 200) {
+            return;
+        }
+        try {
+            android.widget.FrameLayout.LayoutParams lp =
+                    (android.widget.FrameLayout.LayoutParams) tabStrip.getLayoutParams();
+            lp.height = (int) getResources().getDimension(R.dimen.main_tab_bar_height);
+            tabStrip.setLayoutParams(lp);
+            // 文字垂直居中，固定高度 TAB 栏内上下空隙均匀
+            tabStrip.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            try {
+                java.lang.reflect.Field minPadField =
+                        android.support.v4.view.PagerTabStrip.class.getDeclaredField("mMinPaddingBottom");
+                minPadField.setAccessible(true);
+                int minPad = (int) (getResources().getDisplayMetrics().density * 2.0f + 0.5f);
+                minPadField.setInt(tabStrip, minPad);
+            } catch (Throwable t) {
+            }
+            tabStrip.setPadding(0, 0, 0, 0);
+            tabStrip.requestLayout();
+            tabStrip.invalidate();
+        } catch (Throwable t) {
+        }
+    }
+
+    // 普通视频视图（三个 Tab）
+    private void initNormalVideo() {
+        viewPager = (ViewPager) findViewById(R.id.viewpager);
+        safeSetAdapter(new VideoDetailPagerAdapter(getSupportFragmentManager()));
+        viewPager.setOffscreenPageLimit(mOfflineMode ? 1 : 1);
+
+        viewPager.setOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+            @Override
+            public void onPageSelected(int position) {
+                currentPagePosition = position;
+            }
+        });
+
+        findViewById(R.id.btn_back).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                finish();
+            }
+        });
+    }
+
+    /**
+     * 安全地给 ViewPager 设置 adapter：
+     * 1. 设置前先释放全局图片缓存，为 inflate fragment 布局腾出外部堆空间（Android 2.x 上 bitmap 常驻外部堆）；
+     * 2. inflate 时若 OOM（InflateException/OOM），释放缓存后重试一次。
+     */
+    private void safeSetAdapter(final android.support.v4.view.PagerAdapter adapter) {
+        if (viewPager == null) return;
+        try {
+            // 仅在内存紧张时才释放全局图片缓存；
+            // 平时保留，让从推荐/搜索/相关视频/收藏等页面进入时封面直接命中内存，不再重新下载。
+            if (cn.ottohub.oh2013.util.GlobalImageCache.isMemoryLow()) {
+                cn.ottohub.oh2013.util.GlobalImageCache.getInstance().releaseMemory();
+            }
+        } catch (Throwable t) {
+        }
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                viewPager.setAdapter(adapter);
+                return;
+            } catch (OutOfMemoryError e) {
+                cn.ottohub.oh2013.util.GlobalImageCache.getInstance().releaseMemory();
+                System.gc();
+            } catch (android.view.InflateException e) {
+                cn.ottohub.oh2013.util.GlobalImageCache.getInstance().releaseMemory();
+                System.gc();
+            } catch (Throwable e) {
+                android.util.Log.e("VideoDetail", "设置ViewPager adapter失败: " + e.getMessage());
+                if (attempt == 1) return;
+                cn.ottohub.oh2013.util.GlobalImageCache.getInstance().releaseMemory();
+                System.gc();
+            }
+        }
+    }
+
+    // 初始化底部四个shit按钮
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            showInteractionMenu();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    private void addFocusable(View v) {
+        if (v == null) {
+            return;
+        }
+        v.setFocusable(true);
+        // 触屏用户不设置可触摸焦点：焦点系统是自绘光标（mFocusIndex+高亮），不依赖真实焦点；
+        // 若按钮 focusableInTouchMode，在 ScrollView 内第一次点击会被焦点获取吞掉、第二次才触发 onClick
+        if (mKeyNavActive) {
+            v.setFocusableInTouchMode(true);
+        }
+        mFocusableViews.add(v);
+    }
+
+    public void rebuildFocusableViews() {
+        mFocusableViews.clear();
+        mOriginalBackgrounds.clear();
+
+        // 焦点列表：播放 → UP主 → 标签 → 分P
+        // 返回由 BACK / 右软键，不占用焦点项
+
+        // 1. 播放按钮（fragment 中的核心操作）
+        View btnPlay = findViewById(R.id.btn_play);
+        addFocusable(btnPlay);
+
+        // 2. UP主（有文本才可聚焦，点击跳 UP 主页）
+        TextView upName = (TextView) findViewById(R.id.tv_up_name_new);
+        if (upName != null && upName.getText() != null
+                && upName.getText().length() > 0) {
+            addFocusable(upName);
+        }
+
+        // 3. 标签区（有标签才可聚焦，确认键弹标签列表）
+        View tags = findViewById(R.id.tags_container);
+        if (videoDetailFragment != null
+                && videoDetailFragment.getValidTags() != null
+                && videoDetailFragment.getValidTags().size() > 0) {
+            addFocusable(tags);
+        }
+
+        // 4. 分P列表（有分P才可聚焦，确认键进入分P浏览）
+        View parts = findViewById(R.id.lv_parts);
+        if (videoDetailFragment != null
+                && videoDetailFragment.getPartCount() > 0) {
+            addFocusable(parts);
+        }
+
+        // 默认焦点：优先定位到播放按钮（最重要），否则第一个
+        int target = -1;
+        if (btnPlay != null) {
+            target = mFocusableViews.indexOf(btnPlay);
+        }
+        if (target < 0 && !mFocusableViews.isEmpty()) {
+            target = 0;
+        }
+        mFocusIndex = target;
+        applyFocusHighlight();
+        // 仅按键导航激活时才滚动到焦点视图；触屏用户不滚动，避免数据加载后自动平滑滚动
+        if (mKeyNavActive) {
+            ensureFocusVisible(getCurrentFocusView());
+        }
+    }
+
+    private View getCurrentFocusView() {
+        if (mFocusIndex >= 0 && mFocusIndex < mFocusableViews.size()) {
+            return mFocusableViews.get(mFocusIndex);
+        }
+        return null;
+    }
+
+    private void moveFocus(int delta) {
+        int n = mFocusableViews.size();
+        if (n == 0) {
+            return;
+        }
+        int cur = mFocusIndex < 0 ? 0 : mFocusIndex;
+        int next = cur + delta;
+        if (next < 0) {
+            // 顶部边界：不循环到底部，而是滚动到 ScrollView 顶部（封面标题可见），
+            // 焦点保持当前（播放按钮），让用户可以"回到顶部"看到封面。
+            scrollToTop();
+            return;
+        }
+        if (next >= n) {
+            // 底部边界：滚动到 ScrollView 底部，焦点保持当前
+            scrollToBottom();
+            return;
+        }
+        if (next == cur) {
+            return;
+        }
+        mFocusIndex = next;
+        applyFocusHighlight();
+        ensureFocusVisible(getCurrentFocusView());
+        vibrateFeedback();
+    }
+
+    private void scrollToTop() {
+        ScrollView sv = videoDetailFragment != null
+                ? videoDetailFragment.getScrollView() : null;
+        if (sv != null) {
+            sv.smoothScrollTo(0, 0);
+        }
+    }
+
+    private void scrollToBottom() {
+        ScrollView sv = videoDetailFragment != null
+                ? videoDetailFragment.getScrollView() : null;
+        if (sv != null && sv.getChildCount() > 0) {
+            View content = sv.getChildAt(0);
+            int bottom = content.getHeight() - sv.getHeight();
+            if (bottom < 0) {
+                bottom = 0;
+            }
+            sv.smoothScrollTo(0, bottom);
+        }
+    }
+
+    /**
+     * 让焦点 view 在 ScrollView 内可见：焦点移动时联动滚动画面，
+     * 避免光标跑到屏幕外看不见。
+     */
+    private void ensureFocusVisible(View v) {
+        if (v == null) {
+            return;
+        }
+        ScrollView sv = null;
+        if (videoDetailFragment != null) {
+            sv = videoDetailFragment.getScrollView();
+        }
+        if (sv == null) {
+            return;
+        }
+        // 累加父级 getTop 得到 v 相对 ScrollView 内容顶部的 y
+        int top = 0;
+        View cur = v;
+        while (cur != null && cur != sv) {
+            top += cur.getTop();
+            cur = (View) cur.getParent();
+        }
+        if (cur == null) {
+            // 不在 ScrollView 内（如顶栏元素），无需滚动
+            return;
+        }
+        int bottom = top + v.getHeight();
+        int scrollY = sv.getScrollY();
+        int height = sv.getHeight();
+        int target = scrollY;
+        if (top < scrollY) {
+            // 焦点在可视区上方：向上滚
+            target = Math.max(0, top - 20);
+        } else if (bottom > scrollY + height) {
+            // 焦点在可视区下方：向下滚
+            target = bottom - height + 20;
+        }
+        if (target != scrollY) {
+            sv.smoothScrollTo(0, target);
+        }
+    }
+
+    // 焦点高亮：暗橙色（与主色 #FF8C00 对比）
+    private static final int FOCUS_COLOR = 0xFFE67300;
+
+    private void applyFocusHighlight() {
+        // 触屏用户未按键时不做任何样式修改，避免默认高亮第一项/改写按钮外观
+        if (!mKeyNavActive) {
+            return;
+        }
+        int n = mFocusableViews.size();
+        for (int i = 0; i < n; i++) {
+            View v = mFocusableViews.get(i);
+            if (v == null) {
+                continue;
+            }
+            if (i == mFocusIndex) {
+                // 保存原 background（仅保存一次）
+                if (!mOriginalBackgrounds.containsKey(v)) {
+                    mOriginalBackgrounds.put(v, v.getBackground());
+                }
+                // 选中效果：
+                // 播放按钮本身是粉色 #FF8C00，选中时保持粉色不变，
+                // 仅加粗文字 + 白色光晕表示选中（不再替换为深红高亮色）。
+                // 其他焦点项叠加深红色粗边框（同圆角）作为选中标识。
+                int corner = dpToPx(2);
+                Drawable bg = v.getBackground();
+                if (v.getId() == R.id.btn_play) {
+                    try {
+                        Button b = (Button) v;
+                        b.setTypeface(null, android.graphics.Typeface.BOLD);
+                        b.getPaint().setShadowLayer(8, 0, 0, 0xFFFFFFFF);
+                        b.invalidate();
+                    } catch (Exception e) {
+                        // 忽略样式异常
+                    }
+                    v.setBackgroundDrawable(bg);
+                } else {
+                    // 叠加深红色粗边框（与播放按钮同圆角）
+                    GradientDrawable border = new GradientDrawable();
+                    border.setShape(GradientDrawable.RECTANGLE);
+                    border.setCornerRadius(corner);
+                    border.setStroke(dpToPx(5), FOCUS_COLOR);
+                    border.setColor(0x00000000);
+                    Drawable[] layers;
+                    if (bg != null) {
+                        layers = new Drawable[]{bg, border};
+                    } else {
+                        layers = new Drawable[]{new ColorDrawable(0x00000000), border};
+                    }
+                    v.setBackgroundDrawable(new LayerDrawable(layers));
+                }
+            } else {
+                // 恢复播放按钮文字样式（常规字重、无阴影）
+                if (v.getId() == R.id.btn_play) {
+                    try {
+                        Button b = (Button) v;
+                        b.setTypeface(null, android.graphics.Typeface.NORMAL);
+                        b.getPaint().setShadowLayer(0, 0, 0, 0);
+                        b.invalidate();
+                    } catch (Exception e) {
+                        // 忽略样式异常
+                    }
+                }
+                // 恢复原 background（仅恢复被高亮覆盖过的；从未选中的项保持初始背景）
+                if (mOriginalBackgrounds.containsKey(v)) {
+                    v.setBackgroundDrawable(mOriginalBackgrounds.get(v));
+                }
+            }
+        }
+    }
+
+    // 焦点移动 / 确认时的短震动反馈，让按键手机有"到选中"手感。
+    // 注意：Vibrator.vibrate(long) 是 API 1+，不调用 hasVibrator()（API 11+），
+    // 用 catch(Throwable) （无震动马达/老系统 NoSuchMethodError 都静默忽略）。
+    private void vibrateFeedback() {
+        try {
+            android.os.Vibrator vibrator =
+                    (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibrator != null) {
+                vibrator.vibrate(30);
+            }
+        } catch (Throwable t) {
+            // 无震动能力时静默忽略
+        }
+    }
+
+    /**
+     * 确认键触发当前焦点项：标签→弹标签列表；分P→进入分P浏览；其余→performClick。
+     */
+    private void triggerFocus() {
+        if (mFocusIndex < 0 || mFocusIndex >= mFocusableViews.size()) {
+            return;
+        }
+        View v = mFocusableViews.get(mFocusIndex);
+        if (v == null) {
+            return;
+        }
+        vibrateFeedback();
+        int id = v.getId();
+        if (id == R.id.tags_container) {
+            showTagChoiceDialog();
+        } else if (id == R.id.lv_parts) {
+            enterPartBrowsing();
+        } else {
+            v.performClick();
+        }
+    }
+
+    /**
+     * 左软键：呼出操作菜单（下载/评论/收藏/分享/三连）。
+     * 由 AlertDialog.setItems，Android 系统原生支持方向键/确认键导航。
+     */
+    private void showActionMenu() {
+        final String[] items = {
+                getString(R.string.videodetail_download),
+                getString(R.string.videodetail_tab_comment),
+                getString(R.string.videodetail_favorite),
+                getString(R.string.videodetail_share),
+                "点赞冷藏"
+        };
+        new AlertDialog.Builder(DialogUtil.wrap(this))
+                .setTitle(getString(R.string.videodetail_action_menu))
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which == 0) {
+                            showDownloadChoiceDialog();
+                        } else if (which == 1) {
+                            showSendCommentDialog();
+                        } else if (which == 2) {
+                            showFavoriteDialog();
+                        } else if (which == 3) {
+                            shareVideo();
+                        } else if (which == 4) {
+                            showInteractionMenu();
+                        }
+                    }
+                })
+                .setNegativeButton(getString(R.string.videodetail_cancel), null)
+                .show();
+    }
+
+    /**
+     * 标签焦点项确认：弹标签列表对话框（系统原生按键导航）。
+     */
+    private void showTagChoiceDialog() {
+        if (videoDetailFragment == null) {
+            return;
+        }
+        java.util.ArrayList<String> tags = videoDetailFragment.getValidTags();
+        if (tags == null || tags.size() == 0) {
+            Toast.makeText(this, getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String[] arr = new String[tags.size()];
+        for (int i = 0; i < tags.size(); i++) {
+            arr[i] = tags.get(i);
+        }
+        new AlertDialog.Builder(DialogUtil.wrap(this))
+                .setTitle(getString(R.string.videodetail_tag_choice))
+                .setItems(arr, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (videoDetailFragment != null) {
+                            videoDetailFragment.searchTag(arr[which]);
+                        }
+                    }
+                })
+                .setNegativeButton(getString(R.string.videodetail_cancel), null)
+                .show();
+    }
+
+    // ===== 分P浏览模式 =====
+    // 焦点在"分P列表"上按确认键进入：上下方向键翻分P（选中高亮），
+    // 确认键播放当前分P，左/右软键或 BACK 退出浏览回到内容区焦点。
+    private void enterPartBrowsing() {
+        if (videoDetailFragment == null || videoDetailFragment.getPartCount() <= 0) {
+            return;
+        }
+        mPartBrowsing = true;
+        // 高亮分P列表容器
+        View parts = findViewById(R.id.lv_parts);
+        if (parts != null) {
+            if (!mOriginalBackgrounds.containsKey(parts)) {
+                mOriginalBackgrounds.put(parts, parts.getBackground());
+            }
+            parts.setBackgroundResource(R.drawable.focus_overlay);
+        }
+        videoDetailFragment.selectPart(videoDetailFragment.getCurrentPartIndex());
+    }
+
+    private void movePart(int delta) {
+        if (videoDetailFragment == null) {
+            return;
+        }
+        int total = videoDetailFragment.getPartCount();
+        if (total <= 0) {
+            return;
+        }
+        int cur = videoDetailFragment.getCurrentPartIndex();
+        int next = cur + delta;
+        // 分P浏览：到两端停在原地（不循环）
+        if (next < 0) {
+            next = 0;
+        } else if (next >= total) {
+            next = total - 1;
+        }
+        if (next == cur) {
+            return;
+        }
+        videoDetailFragment.selectPart(next);
+    }
+
+    private void playCurrentPart() {
+        if (videoDetailFragment != null) {
+            videoDetailFragment.playPart(videoDetailFragment.getCurrentPartIndex());
+        }
+    }
+
+    private void exitPartBrowsing() {
+        if (!mPartBrowsing) {
+            return;
+        }
+        mPartBrowsing = false;
+        // 恢复内容区焦点（rebuild 会重新 applyFocusHighlight）
+        rebuildFocusableViews();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            int action = KeyBindingUtil.classify(event.getKeyCode());
+            // 首次按下才执行动作；长按 repeat 事件一律消费，
+            // 防止 ListView/ScrollView 的内置"长按持续滚动"干扰光标系统
+            boolean firstPress = (event.getRepeatCount() == 0);
+
+            // 分P浏览模式：方向键翻分P、确认播放、左/右软键或 BACK 退出
+            if (mPartBrowsing) {
+                if (firstPress) {
+                    if (action == KeyBindingUtil.ACTION_UP) {
+                        movePart(-1);
+                    } else if (action == KeyBindingUtil.ACTION_DOWN) {
+                        movePart(1);
+                    } else if (action == KeyBindingUtil.ACTION_CONFIRM) {
+                        playCurrentPart();
+                    } else if (action == KeyBindingUtil.ACTION_SOFT_LEFT
+                            || action == KeyBindingUtil.ACTION_SOFT_RIGHT) {
+                        exitPartBrowsing();
+                    } else if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                        exitPartBrowsing();
+                    }
+                }
+                // 分P浏览中所有 DOWN（含 repeat）一律消费，避免误操作
+                return true;
+            }
+
+            // 左右方向键切换 ViewPager Tab（与 MainActivity 一致）
+            if (firstPress) {
+                if (action == KeyBindingUtil.ACTION_LEFT) {
+                    if (viewPager != null && viewPager.getCurrentItem() > 0) {
+                        viewPager.setCurrentItem(viewPager.getCurrentItem() - 1);
+                    }
+                    return true;
+                }
+                if (action == KeyBindingUtil.ACTION_RIGHT) {
+                    if (viewPager != null && viewPager.getAdapter() != null) {
+                        int cur = viewPager.getCurrentItem();
+                        int total = viewPager.getAdapter().getCount();
+                        if (cur < total - 1) {
+                            viewPager.setCurrentItem(cur + 1);
+                        }
+                    }
+                    return true;
+                }
+
+                // 左软键：呼出操作菜单
+                if (action == KeyBindingUtil.ACTION_SOFT_LEFT) {
+                    showActionMenu();
+                    return true;
+                }
+                // 右软键：返回
+                if (action == KeyBindingUtil.ACTION_SOFT_RIGHT) {
+                    finish();
+                    return true;
+                }
+            }
+
+            // 按当前 Tab 分发方向键/确认键（所有 DOWN 都消费，含长按 repeat）：
+            //   视频详情 → Activity 焦点系统；相关视频 → 列表光标；评论 → 评论光标
+            int current = viewPager != null ? viewPager.getCurrentItem() : 0;
+            Fragment f = getFragmentByPosition(current);
+            if (f instanceof RelatedVideosFragment) {
+                if (((RelatedVideosFragment) f).handleRemoteKey(event)) {
+                    return true;
+                }
+            } else if (f instanceof CommentFragment) {
+                if (((CommentFragment) f).handleRemoteKey(event)) {
+                    return true;
+                }
+            } else if (f instanceof VideoDetailFragment) {
+                // 视频详情 Tab：Activity 层焦点系统
+                if (handleDetailKey(event)) {
+                    return true;
+                }
+            } else {
+                // 其他（番剧详情等）：只消费方向键/确认键，数字翻页键不消费（不在列表页时无意义）
+                if (action == KeyBindingUtil.ACTION_UP
+                        || action == KeyBindingUtil.ACTION_DOWN
+                        || action == KeyBindingUtil.ACTION_LEFT
+                        || action == KeyBindingUtil.ACTION_RIGHT
+                        || action == KeyBindingUtil.ACTION_CONFIRM) {
+                    return true;
+                }
+            }
+
+            // 左右方向键：不切 Tab
+            if (action == KeyBindingUtil.ACTION_LEFT
+                    || action == KeyBindingUtil.ACTION_RIGHT) {
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    /**
+     * 视频详情 Tab 的方向键/确认键处理（Activity 层焦点光标系统）。
+     * 所有 DOWN（含长按 repeat）都消费，防止 ScrollView 内置长按滚动；动作仅在首次按下时执行。
+     */
+    private boolean handleDetailKey(KeyEvent event) {
+        if (event.getAction() != KeyEvent.ACTION_DOWN) {
+            return false;
+        }
+        int action = KeyBindingUtil.classify(event.getKeyCode());
+        if (action == KeyBindingUtil.ACTION_UP
+                || action == KeyBindingUtil.ACTION_DOWN
+                || action == KeyBindingUtil.ACTION_LEFT
+                || action == KeyBindingUtil.ACTION_RIGHT
+                || action == KeyBindingUtil.ACTION_CONFIRM) {
+            // 真实遥控器按键：启用光标高亮（首次按键立即显示当前位置）
+            if (!mKeyNavActive) {
+                mKeyNavActive = true;
+                applyFocusHighlight();
+            }
+            if (event.getRepeatCount() == 0) {
+                if (action == KeyBindingUtil.ACTION_UP) {
+                    moveFocus(-1);
+                } else if (action == KeyBindingUtil.ACTION_DOWN) {
+                    moveFocus(1);
+                } else if (action == KeyBindingUtil.ACTION_CONFIRM) {
+                    triggerFocus();
+                }
+            }
+            // 所有方向/确认 DOWN 都消费（含长按 repeat），避免 ScrollView 内置滚动
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 根据 ViewPager 位置获取对应 Fragment 实例（通过 FragmentManager tag）。
+     */
+    private Fragment getFragmentByPosition(int position) {
+        try {
+            return getSupportFragmentManager().findFragmentByTag(
+                    "android:switcher:" + R.id.viewpager + ":" + position);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 标签/分P 内容加载完成后通知 Activity 重建焦点列表。
+     */
+    public void notifyTagsUpdated() {
+        if (!fragmentReady || videoDetailFragment == null) return;
+        videoDetailFragment.getView().post(new Runnable() {
+            @Override
+            public void run() {
+                rebuildFocusableViews();
+            }
+        });
+    }
+
+    private void initBottomButtons() {
+        // 分享按钮
+        ImageView btnShare = (ImageView) findViewById(R.id.btn_share);
+        if (btnShare != null) {
+            btnShare.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    shareVideo();
+                }
+            });
+        }
+
+        // 底部独立「点赞 / 冷藏」按钮
+        TextView likeBtn = (TextView) findViewById(R.id.btn_like_text);
+        TextView favBtn = (TextView) findViewById(R.id.btn_favorite_text);
+        btnFavorite = null;
+        bindDetailActionButtons(likeBtn, favBtn);
+
+        // 评论按钮
+        btnComment = (ImageView) findViewById(R.id.btn_comment);
+        if (btnComment != null) {
+            if (mOfflineMode) {
+                btnComment.setVisibility(View.GONE);
+            } else {
+                btnComment.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        long mid = SharedPreferencesUtil.getLong("mid", 0);
+                        String cookies = SharedPreferencesUtil.getString("cookies", "");
+                        if (mid == 0 || cookies == null || cookies.length() == 0) {
+                            Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_8bf7), Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        showSendCommentDialog();
+                    }
+                });
+            }
+        }
+
+        // 下载/删除按钮
+        ImageView btnDownload = (ImageView) findViewById(R.id.btn_download);
+        if (btnDownload != null) {
+            if (mOfflineMode) {
+                btnDownload.setImageResource(R.drawable.ic_action_delete);
+                btnDownload.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mIsDeleteDialogShowing) return;
+                        showDeleteConfirmDialog();
+                    }
+                });
+            } else {
+                btnDownload.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        showDownloadChoiceDialog();
+                    }
+                });
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (viewPager != null) {
+            currentPagePosition = viewPager.getCurrentItem();
+        }
+        if (mIsPausingForTransient) {
+            mIsPausingForTransient = false;
+            return;
+        }
+        isCleaned = false;
+        cleanupHandler.removeCallbacksAndMessages(null);
+        cleanupHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (!isFinishing() && viewPager != null && !isCleaned) {
+                    viewPager.setAdapter(null);
+                    isCleaned = true;
+                }
+            }
+        }, 300);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mIsPausingForTransient = false;
+        cleanupHandler.removeCallbacksAndMessages(null);
+        isCleaned = false;
+        if (viewPager != null && viewPager.getAdapter() == null) {
+            if (isBangumi) {
+                safeSetAdapter(new BangumiPagerAdapter(getSupportFragmentManager()));
+            } else {
+                if (mBangumiMediaId > 0) {
+                    safeSetAdapter(new TwoTabPagerAdapter(getSupportFragmentManager()));
+                } else {
+                    safeSetAdapter(new VideoDetailPagerAdapter(getSupportFragmentManager()));
+                }
+            }
+            viewPager.setCurrentItem(currentPagePosition, false);
+        }
+        if (!mOfflineMode) {
+            checkFavoriteState();
+            checkLikeState();
+        }
+        mIsDeleteDialogShowing = false;
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        cleanupHandler.removeCallbacksAndMessages(null);
+        videoDetailFragment = null;
+        fragmentReady = false;
+        if (mDownloadDialog != null && mDownloadDialog.isShowing()) {
+            mDownloadDialog.dismiss();
+            mDownloadDialog = null;
+        }
+    }
+
+    private void updateAvidDisplay() {
+        if (aid != 0L) {
+            tvAvid.setText(cn.ottohub.oh2013.util.Terminology.videoId(aid));
+        } else if (bvid != null && bvid.length() > 0) {
+            if (bvid.startsWith("ov") || bvid.startsWith("OV")) {
+                tvAvid.setText(bvid);
+            } else {
+                try {
+                    tvAvid.setText(cn.ottohub.oh2013.util.Terminology.videoId(Long.parseLong(bvid)));
+                } catch (Exception e) {
+                    tvAvid.setText("ov" + bvid);
+                }
+            }
+        } else {
+            tvAvid.setText(getString(R.string.videodetailactivity_settext_53c2));
+        }
+    }
+
+    private void copyAvidToClipboard() {
+        String copyText = "";
+        if (aid != 0L) {
+            copyText = cn.ottohub.oh2013.util.Terminology.videoId(aid);
+        } else if (bvid != null && bvid.length() > 0) {
+            copyText = bvid.startsWith("ov") ? bvid : ("ov" + bvid);
+        }
+        if (copyText == null || copyText.length() == 0) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_65e0), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            android.text.ClipboardManager clipboard = (android.text.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setText(copyText);
+                Toast.makeText(this, getString(R.string.videodetail_toast_copied, copyText), Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_590d), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareVideo() {
+        String shareText = "";
+        String shareUrl = "";
+        if (aid != 0L) {
+            shareText = cn.ottohub.oh2013.util.Terminology.videoId(aid);
+            shareUrl = "https://www.ottohub.cn/v/" + aid;
+        } else if (bvid != null && bvid.length() > 0) {
+            shareText = bvid.startsWith("ov") || bvid.startsWith("OV") ? bvid : ("ov" + bvid);
+            shareUrl = "https://www.ottohub.cn/v/" + bvid.replace("ov", "").replace("OV", "");
+        } else {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String finalShareText = shareText;
+        final String finalShareUrl = shareUrl;
+        final String[] shareOptions = {
+                getString(R.string.videodetail_copy_link),
+                getString(R.string.videodetail_share_to),
+                getString(R.string.videodetail_cancel)
+        };
+        new AlertDialog.Builder(DialogUtil.wrap(this))
+                .setTitle(getString(R.string.videodetailactivity_settitle_5206))
+                .setItems(shareOptions, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which == 0) {
+                            copyToClipboard(finalShareUrl);
+                            Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_94fe), Toast.LENGTH_SHORT).show();
+                        } else if (which == 1) {
+                            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                            shareIntent.setType("text/plain");
+                            shareIntent.putExtra(Intent.EXTRA_TEXT, finalShareText + "\n" + finalShareUrl);
+                            startActivity(Intent.createChooser(shareIntent, getString(R.string.videodetail_share_title)));
+                        }
+                    }
+                })
+                .show();
+    }
+
+    private void copyToClipboard(String text) {
+        try {
+            android.text.ClipboardManager clipboard = (android.text.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setText(text);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void showSendCommentDialog() {
+        final LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        final EditText input = new EditText(this);
+        input.setHint(getString(R.string.videodetailactivity_sethint_8f93));
+        input.setLines(3);
+        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(1000)});
+        if (cn.ottohub.oh2013.util.SdkHelper.getSdkInt() >= 14) {
+            android.graphics.drawable.GradientDrawable inputBg = new android.graphics.drawable.GradientDrawable();
+            inputBg.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+            inputBg.setStroke(dpToPx(2), 0xFFD0D0D0);
+            inputBg.setColor(0xFFFFFFFF);
+            input.setBackgroundDrawable(inputBg);
+        }
+
+        // 顶部按钮行：仅表情（图片上传已移除）
+        final LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setPadding(0, 0, 0, dpToPx(6));
+
+        dialogImageBtn = null;
+
+        final TextView emojiBtn = new TextView(this);
+        emojiBtn.setText(getString(R.string.videodetailactivity_settext_8868));
+        emojiBtn.setTextSize(13);
+        emojiBtn.setTextColor(0xFFFF8C00);
+        emojiBtn.setBackgroundDrawable(getResources().getDrawable(R.drawable.item_click_effect));
+        emojiBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showEmojiPicker(input);
+            }
+        });
+        btnRow.addView(emojiBtn);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        layout.addView(btnRow, lp);
+        layout.addView(input, lp);
+
+        final TextView clearText = new TextView(this);
+        clearText.setText(getString(R.string.videodetailactivity_settext_6e05));
+        clearText.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        clearText.setPadding(0, 8, 0, 0);
+        clearText.setTextSize(14);
+        clearText.setTextColor(0xFF666666);
+        clearText.setBackgroundDrawable(getResources().getDrawable(R.drawable.item_click_effect));
+        clearText.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                input.setText("");
+                input.requestFocus();
+                android.view.inputmethod.InputMethodManager imm =
+                        (android.view.inputmethod.InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                }
+            }
+        });
+        layout.addView(clearText, lp);
+
+        pendingImageDataList.clear();
+
+        final AlertDialog dialog = new AlertDialog.Builder(DialogUtil.wrap(this))
+                .setTitle(getString(R.string.videodetailactivity_settitle_53d1))
+                .setView(layout)
+                .setPositiveButton(getString(R.string.videodetail_send_comment), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                    }
+                })
+                .setNegativeButton(getString(R.string.videodetail_cancel), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        pendingImageDataList.clear();
+                        d.dismiss();
+                    }
+                })
+                .create();
+
+        dialog.show();
+        android.view.Window dialogWindow = dialog.getWindow();
+        if (dialogWindow != null) {
+            dialogWindow.setLayout(
+                    (int) (getResources().getDisplayMetrics().widthPixels * 0.9),
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+        final Button sendBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        sendBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String text = input.getText().toString().trim();
+                if (text == null || text.length() == 0) {
+                    Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_8bc4), Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (ReplyHelper.isSending()) {
+                    Toast.makeText(VideoDetailActivity.this, "正在发送，请稍候", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                sendBtn.setEnabled(false);
+                dialog.dismiss();
+                sendComment(text);
+            }
+        });
+    }
+
+    private void sendComment(final String text) {
+        Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_6b63), Toast.LENGTH_SHORT).show();
+
+        final long finalAid = getCorrectAid();
+
+        ReplyHelper.sendReply(this, finalAid, 0, 0, text, new ReplyHelper.ReplyCallback() {
+            @Override
+            public void onSuccess(String responseJson) {
+                Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_8bc4_1), Toast.LENGTH_SHORT).show();
+                CommentFragment.CommentItem newItem = CommentFragment.parseCommentFromResponse(responseJson);
+                Fragment fragment = getSupportFragmentManager().findFragmentByTag(
+                        "android:switcher:" + R.id.viewpager + ":" + (isBangumi ? 1 : 2));
+                if (fragment instanceof CommentFragment) {
+                    ((CommentFragment) fragment).insertNewComment(newItem);
+                } else {
+                    refreshComments();
+                }
+            }
+
+            @Override
+            public void onFailed(String error) {
+                // 错误已在 ReplyHelper 中 Toast 显示
+            }
+        });
+    }
+
+    private void sendCommentWithPicture(final String text, final String picturesJson) {
+        Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_6b63), Toast.LENGTH_SHORT).show();
+        final long finalAid = getCorrectAid();
+        ReplyHelper.sendReplyWithPictures(this, finalAid, 0, 0, text, picturesJson,
+                new ReplyHelper.ReplyCallback() {
+            @Override
+            public void onSuccess(String responseJson) {
+                Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_8bc4_1), Toast.LENGTH_SHORT).show();
+                CommentFragment.CommentItem newItem = CommentFragment.parseCommentFromResponse(responseJson);
+                Fragment fragment = getSupportFragmentManager().findFragmentByTag(
+                        "android:switcher:" + R.id.viewpager + ":" + (isBangumi ? 1 : 2));
+                if (fragment instanceof CommentFragment) {
+                    ((CommentFragment) fragment).insertNewComment(newItem);
+                } else {
+                    refreshComments();
+                }
+            }
+            @Override
+            public void onFailed(String error) {}
+        });
+    }
+
+    private long getCorrectAid() {
+        if (aid != 0L) {
+            return aid;
+        }
+        if (videoDetailFragment != null && videoDetailFragment.videoInfo != null
+                && videoDetailFragment.videoInfo.aid != 0L) {
+            aid = videoDetailFragment.videoInfo.aid;
+            return aid;
+        }
+        if (mResolvedAidFromBvid != 0L) {
+            aid = mResolvedAidFromBvid;
+            return aid;
+        }
+        long parsed = parseAidFromBvid(bvid);
+        if (parsed != 0L) {
+            aid = parsed;
+            return aid;
+        }
+        return 0L;
+    }
+
+    /** Keep aid field set so download/like/favorite work on related/comment tabs. */
+    public void ensureAid(long newAid) {
+        if (newAid != 0L) {
+            aid = newAid;
+        }
+    }
+
+    private static long parseAidFromBvid(String bv) {
+        if (bv == null || bv.length() == 0) return 0L;
+        String s = bv;
+        if (s.length() > 2 && (s.startsWith("ov") || s.startsWith("OV"))) {
+            s = s.substring(2);
+        }
+        try {
+            return Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    private static final String[] EMOJIS = {
+        "( ゜- ゜)つロ", "_(:з」∠)_", "（⌒▽⌒）", "（￣▽￣）", "⌓‿⌓",
+        "(=・ω・=)", "(*°▽°*)", "八(*°▽°*)♪", "✿ヽ(°▽°)ノ✿", "(¦3【▓▓】",
+        "눈_눈", "(ಡωಡ)", "_(≧∇≦」∠)_", "━━━∑(ﾟ□ﾟ*川", "━(｀・ω・´)",
+        "(￣3￣)", "✧(≖ ◡ ≖✿)", "(･∀･)", "(〜￣△￣)〜", "→_→",
+        "(°∀°)ﾉ", "╮(￣▽￣)╭", "( ´_ゝ｀)", "←_←", "(;¬_¬)",
+        "(ﾟДﾟ≡ﾟдﾟ)!?", "( ´･･)ﾉ", "(._.`)", "Σ(ﾟдﾟ;)", "Σ( ￣□￣||)",
+        "<(´；ω；`)", "（/TДT)/", "(^・ω・^)", "(｡･ω･｡)", "(●￣(ｴ)￣●)",
+        "ε=ε=(ノ≧∇≦)ノ", "(´･_･`)", "(-_-#)", "（￣へ￣）", "(￣ε(#￣)",
+        "Σ(╯°口°)╯(┴—┴", "ヽ(`Д´)ﾉ", "(\"▔□▔)/", "(º﹃º )", "(๑>؂<๑）",
+        "｡ﾟ(ﾟ´Д｀)ﾟ｡", "(∂ω∂)", "(┯_┯)", "(・ω< )★", "( ๑ˊ•̥▵•)੭₎₎",
+        "¥ㄟ(´･ᴗ･`)ノ¥", "Σ_(꒪ཀ꒪」∠)_", "٩(๛ ˘ ³˘)۶❤", "(๑‾᷅^‾᷅๑)"
+    };
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        if (requestCode == REQUEST_PICK_COMMENT_IMAGE && resultCode == RESULT_OK && data != null) {
+            final android.net.Uri imageUri = data.getData();
+            if (imageUri != null) {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            java.io.InputStream is = getContentResolver().openInputStream(imageUri);
+                            if (is == null) return;
+                            byte[] imageBytes = NetWorkUtil.readStream(is);
+                            is.close();
+
+                            // 原图直传：不做尺寸缩放与质量压缩，保留原始图片数据
+                            String mimeType = getContentResolver().getType(imageUri);
+                            String ext = "jpg";
+                            if (mimeType != null) {
+                                if (mimeType.contains("png")) {
+                                    ext = "png";
+                                } else if (mimeType.contains("gif")) {
+                                    ext = "gif";
+                                } else if (mimeType.contains("webp")) {
+                                    ext = "webp";
+                                }
+                            }
+
+                            final long finalAid = getCorrectAid();
+                            final String fileName = "comment_" + System.currentTimeMillis() + "." + ext;
+                            final String resultJson = ReplyApi.uploadReplyImage(finalAid, imageBytes, fileName);
+
+                            if (resultJson != null && pendingImageDataList.size() < MAX_COMMENT_IMAGES) {
+                                pendingImageDataList.add(resultJson);
+                                final int imgCount = pendingImageDataList.size();
+                                runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (dialogImageBtn != null) {
+                                            dialogImageBtn.setText("图片(" + imgCount + ")");
+                                        }
+                                        Toast.makeText(VideoDetailActivity.this, "图片已上传 (" + imgCount + ")", Toast.LENGTH_SHORT).show();
+                                    }
+                                });
+                            } else {
+                                runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_56fe), Toast.LENGTH_SHORT).show();
+                                    }
+                                });
+                            }
+                        } catch (final Exception e) {
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetail_toast_image_fail, e.getMessage()), Toast.LENGTH_SHORT).show();
+                                }
+                            });
+                        }
+                    }
+                }).start();
+            }
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private void showEmojiPicker(final EditText input) {
+        final AlertDialog.Builder builder = new AlertDialog.Builder(DialogUtil.wrap(this));
+        builder.setTitle(getString(R.string.videodetailactivity_settitle_9009_2));
+
+        final android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(0, dpToPx(8), 0, dpToPx(8));
+
+        for (int i = 0; i < EMOJIS.length; i++) {
+            final String emoji = EMOJIS[i];
+            final TextView tv = new TextView(this);
+            tv.setText(emoji);
+            tv.setTextSize(16);
+            tv.setTextColor(0xFF333333);
+            tv.setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8));
+            tv.setClickable(true);
+            android.graphics.drawable.GradientDrawable emojiNormal = new android.graphics.drawable.GradientDrawable();
+            emojiNormal.setColor(0xFFF0F0F0);
+            android.graphics.drawable.GradientDrawable emojiPressed = new android.graphics.drawable.GradientDrawable();
+            emojiPressed.setColor(0x40FF8C00);
+            android.graphics.drawable.StateListDrawable emojiBg = new android.graphics.drawable.StateListDrawable();
+            emojiBg.addState(new int[]{android.R.attr.state_pressed}, emojiPressed);
+            emojiBg.addState(new int[]{}, emojiNormal);
+            tv.setBackgroundDrawable(emojiBg);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+            tv.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    int remaining = 1000 - input.length();
+                    if (remaining <= 0) return;
+                    String toInsert = emoji.length() <= remaining ? emoji : emoji.substring(0, remaining);
+                    int pos = input.getSelectionStart();
+                    if (pos < 0) pos = input.length();
+                    input.getText().insert(pos, toInsert);
+                }
+            });
+            list.addView(tv);
+
+            if (i < EMOJIS.length - 1) {
+                View divider = new View(this);
+                divider.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, 1));
+                divider.setBackgroundColor(0xFFDDDDDD);
+                list.addView(divider);
+            }
+        }
+
+        scroll.addView(list, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
+        builder.setView(scroll);
+        builder.setPositiveButton(getString(R.string.videodetail_close_dialog), null);
+        builder.show();
+    }
+
+    private String buildPicturesJson() {
+        try {
+            JSONArray pics = new JSONArray();
+            for (int i = 0; i < pendingImageDataList.size(); i++) {
+                JSONObject imgData = new JSONObject(pendingImageDataList.get(i));
+                JSONObject pic = new JSONObject();
+                pic.put("img_src", imgData.optString("image_url", ""));
+                pic.put("img_width", imgData.optInt("image_width", 0));
+                pic.put("img_height", imgData.optInt("image_height", 0));
+                pic.put("img_size", imgData.optDouble("img_size", 0));
+                pics.put(pic);
+            }
+            return pics.toString();
+        } catch (Exception e) {
+            return "[]";
+        }
+    }
+
+    private int dpToPx(int dp) {
+        float density = getResources().getDisplayMetrics().density;
+        return (int) (dp * density + 0.5f);
+    }
+
+    private String extractCsrfFromCookie(String cookie) {
+        if (cookie == null || cookie.length() == 0) {
+            return null;
+        }
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("bili_jct=([a-f0-9]+)");
+        java.util.regex.Matcher m = p.matcher(cookie);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return null;
+    }
+
+    private void refreshComments() {
+        if (viewPager != null) {
+            int commentPosition = isBangumi ? 1 : 2;
+            viewPager.setCurrentItem(commentPosition);
+        }
+        Fragment fragment = getSupportFragmentManager().findFragmentByTag(
+                "android:switcher:" + R.id.viewpager + ":" + (isBangumi ? 1 : 2));
+        if (fragment instanceof CommentFragment) {
+            ((CommentFragment) fragment).refreshComments();
+        }
+    }
+
+    private void checkFavoriteState() {
+        final long finalAid = getCorrectAid();
+        if (finalAid == 0L) return;
+        if (!cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) return;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final boolean favorited = InteractionApi.isFavorited(finalAid);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            mIsFavorited = favorited;
+                            updateFavoriteIcon();
+                        }
+                    });
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    private void checkLikeState() {
+        final long finalAid = getCorrectAid();
+        if (finalAid == 0L) return;
+        if (!cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) return;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final boolean liked = InteractionApi.isLiked(finalAid);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            mIsLiked = liked;
+                            updateLikeTextButton();
+                        }
+                    });
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    private void showInteractionMenu() {
+        final long finalAid = getCorrectAid();
+        if (finalAid == 0L) {
+            Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        long mid = SharedPreferencesUtil.getLong("mid", 0);
+        if (mid == 0 || !cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) {
+            Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_767b), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String[] items = {
+                getString(R.string.videodetail_like),
+                getString(R.string.videodetail_favorite),
+                "点赞并冷藏"
+        };
+        new AlertDialog.Builder(DialogUtil.wrap(VideoDetailActivity.this))
+                .setTitle(getString(R.string.videodetailactivity_settitle_4e92))
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which == 0) {
+                            new Thread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        final int code = InteractionApi.like(finalAid, 1);
+                                        VideoDetailActivity.this.runOnUiThread(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                if (code == 0) {
+                                                    Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_70b9_1), Toast.LENGTH_SHORT).show();
+                                                } else {
+                                                    Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_70b9), Toast.LENGTH_SHORT).show();
+                                                }
+                                            }
+                                        });
+                                    } catch (final Exception e) {
+                                        VideoDetailActivity.this.runOnUiThread(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                Toast.makeText(VideoDetailActivity.this, "点赞失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                                            }
+                                        });
+                                    }
+                                }
+                            }).start();
+                        } else if (which == 1) {
+                            showFavoriteDialog();
+                        } else if (which == 2) {
+                            new Thread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        final int code = InteractionApi.triple(finalAid);
+                                        VideoDetailActivity.this.runOnUiThread(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                if (code == 0) {
+                                                    Toast.makeText(VideoDetailActivity.this, "点赞并冷藏成功", Toast.LENGTH_SHORT).show();
+                                                } else {
+                                                    Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_4e09), Toast.LENGTH_SHORT).show();
+                                                }
+                                            }
+                                        });
+                                    } catch (final Exception e) {
+                                        VideoDetailActivity.this.runOnUiThread(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                Toast.makeText(VideoDetailActivity.this, getString(R.string.videodetail_toast_triple_fail, e.getMessage()), Toast.LENGTH_SHORT).show();
+                                            }
+                                        });
+                                    }
+                                }
+                            }).start();
+                        }
+                    }
+                })
+                .setNegativeButton(getString(R.string.videodetail_cancel), null)
+                .show();
+    }
+
+    /** Wire like/favorite text buttons from VideoDetailFragment. */
+    public void bindDetailActionButtons(TextView likeBtn, TextView favoriteBtn) {
+        btnLikeText = likeBtn;
+        btnFavoriteText = favoriteBtn;
+        if (btnLikeText != null) {
+            btnLikeText.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    toggleLike();
+                }
+            });
+            updateLikeTextButton();
+        }
+        if (btnFavoriteText != null) {
+            if (mOfflineMode) {
+                btnFavoriteText.setVisibility(View.GONE);
+            } else {
+                btnFavoriteText.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mIsFavoriteLoading || mIsFavoriteUpdating) {
+                            return;
+                        }
+                        final long finalAid = getCorrectAid();
+                        if (finalAid == 0L) {
+                            Toast.makeText(VideoDetailActivity.this, getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        long mid = SharedPreferencesUtil.getLong("mid", 0);
+                        if (mid == 0 || !cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) {
+                            Toast.makeText(VideoDetailActivity.this, getString(R.string.videodetailactivity_toast_767b), Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        showFavoriteDialog();
+                    }
+                });
+            }
+            updateFavoriteIcon();
+        }
+    }
+
+    private void toggleLike() {
+        final long finalAid = getCorrectAid();
+        if (finalAid == 0L) {
+            Toast.makeText(this, getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        long mid = SharedPreferencesUtil.getLong("mid", 0);
+        if (mid == 0 || !cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) {
+            Toast.makeText(this, getString(R.string.videodetailactivity_toast_767b), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final int code = InteractionApi.like(finalAid, mIsLiked ? 0 : 1);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (code == 0) {
+                                mIsLiked = !mIsLiked;
+                                updateLikeTextButton();
+                                Toast.makeText(VideoDetailActivity.this,
+                                        mIsLiked ? getString(R.string.videodetailactivity_toast_70b9_1)
+                                                : "已取消点赞",
+                                        Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(VideoDetailActivity.this,
+                                        getString(R.string.videodetailactivity_toast_70b9),
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        }
+                    });
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(VideoDetailActivity.this, "点赞失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void updateLikeTextButton() {
+        if (btnLikeText == null) return;
+        btnLikeText.setText(mIsLiked ? "已点赞" : "点赞");
+        btnLikeText.setTextColor(mIsLiked ? 0xFFFFD700 : 0xFFFF8C00);
+    }
+
+    private void updateFavoriteIcon() {
+        if (btnFavorite != null) {
+            if (mIsFavorited) {
+                btnFavorite.setColorFilter(0xFFFFD700);
+            } else {
+                btnFavorite.setColorFilter((android.graphics.ColorFilter) null);
+            }
+        }
+        if (btnFavoriteText != null) {
+            btnFavoriteText.setText(mIsFavorited ? "已冷藏" : "冷藏");
+            btnFavoriteText.setTextColor(mIsFavorited ? 0xFFFFD700 : 0xFFFF8C00);
+        }
+    }
+
+    private void showFavoriteDialog() {
+        if (mIsFavoriteUpdating) {
+            return;
+        }
+
+        final long finalAid = getCorrectAid();
+        if (finalAid == 0L) {
+            if (!isFinishing()) {
+                Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+
+        if (!cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) {
+            if (!isFinishing()) {
+                Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_8bf7_1), Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+
+        // 直接切换冷藏状态，无文件夹选择
+        if (mIsFavorited) {
+            removeFromFolder(finalAid, FavoriteApi.DEFAULT_FOLDER_ID);
+        } else {
+            addToFavorite(finalAid, FavoriteApi.DEFAULT_FOLDER_ID);
+        }
+    }
+
+    private void addToFavorite(final long finalAid, final long fid) {
+        if (finalAid == 0L || mIsFavoriteUpdating) return;
+
+        mIsFavoriteUpdating = true;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final int code = FavoriteApi.addFavorite(finalAid, bvid, fid);
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (isFinishing()) return;
+                            mIsFavoriteUpdating = false;
+                            if (code == 0) {
+                                mIsFavorited = true;
+                                updateFavoriteIcon();
+                                Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_6536), Toast.LENGTH_SHORT).show();
+                                sendBroadcast(new Intent(BroadcastConstants.ACTION_FAVORITE_CHANGED));
+                            } else if (code == 11201) {
+                                mIsFavorited = true;
+                                updateFavoriteIcon();
+                                Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_5df2_2), Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(VideoDetailActivity.this, "冷藏失败喵: " + code, Toast.LENGTH_SHORT).show();
+                            }
+                        }
+                    });
+
+                } catch (final Exception e) {
+                    e.printStackTrace();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (isFinishing()) return;
+                            mIsFavoriteUpdating = false;
+                            Toast.makeText(VideoDetailActivity.this, "冷藏失败喵: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void removeFromFolder(final long targetAid, final long targetFid) {
+        if (targetAid == 0L || mIsFavoriteUpdating) return;
+
+        mIsFavoriteUpdating = true;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final int code = FavoriteApi.deleteFavorite(targetAid, bvid, targetFid);
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (isFinishing()) return;
+                            mIsFavoriteUpdating = false;
+                            if (code == 0) {
+                                mIsFavorited = false;
+                                updateFavoriteIcon();
+                                Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_5df2), Toast.LENGTH_SHORT).show();
+                                sendBroadcast(new Intent(BroadcastConstants.ACTION_FAVORITE_CHANGED));
+                            } else {
+                                Toast.makeText(VideoDetailActivity.this, VideoDetailActivity.this.getString(R.string.videodetailactivity_toast_5220_1), Toast.LENGTH_SHORT).show();
+                            }
+                        }
+                    });
+
+                } catch (final Exception e) {
+                    e.printStackTrace();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (isFinishing()) return;
+                            mIsFavoriteUpdating = false;
+                            Toast.makeText(VideoDetailActivity.this, "删除冷藏失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void showDeleteConfirmDialog() {
+        mIsDeleteDialogShowing = true;
+        String title = "";
+        if (videoDetailFragment != null && videoDetailFragment.videoInfo != null) {
+            title = videoDetailFragment.videoInfo.title;
+        }
+        if (title == null || title.length() == 0) {
+            if (aid != 0L) {
+                title = cn.ottohub.oh2013.util.Terminology.videoId(aid);
+            } else if (bvid != null && bvid.length() > 0) {
+                title = bvid;
+            } else {
+                title = getString(R.string.videodetail_this_video);
+            }
+        }
+        new AlertDialog.Builder(DialogUtil.wrap(this))
+                .setTitle(getString(R.string.videodetailactivity_settitle_5220_1))
+                .setMessage(getString(R.string.videodetail_confirm_delete_cache, title))
+                .setPositiveButton(getString(R.string.videodetail_delete), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        deleteOfflineVideo();
+                        mIsDeleteDialogShowing = false;
+                    }
+                })
+                .setNegativeButton(getString(R.string.videodetail_cancel), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        mIsDeleteDialogShowing = false;
+                    }
+                })
+                .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface dialog) {
+                        mIsDeleteDialogShowing = false;
+                    }
+                })
+                .show();
+    }
+
+    private void deleteOfflineVideo() {
+        final long finalAid = getCorrectAid();
+        if (finalAid == 0L) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        File downloadDir = getDownloadDir();
+        File avidDir = new File(downloadDir, String.valueOf(finalAid));
+
+        if (avidDir.exists() && avidDir.isDirectory()) {
+            boolean deleted = deleteRecursive(avidDir);
+            if (deleted) {
+                Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_5df2_1), Toast.LENGTH_SHORT).show();
+                finish();
+            } else {
+                Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_5220), Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_672a), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean deleteRecursive(File file) {
+        if (file == null || !file.exists()) {
+            return false;
+        }
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (int i = 0; i < children.length; i++) {
+                    deleteRecursive(children[i]);
+                }
+            }
+        }
+        return file.delete();
+    }
+
+    private void showDownloadChoiceDialog() {
+        if (isBangumi) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_756a), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // 优先用 Activity 缓存的分P（详情加载后写入），不依赖当前是否在详情 Tab
+        List<VideoDetailFragment.VideoPage> pages = mCachedPages;
+        if (pages == null || pages.size() == 0) {
+            if (videoDetailFragment != null) {
+                pages = videoDetailFragment.getVideoPages();
+            }
+        }
+        if (pages == null || pages.size() == 0) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_65e0_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // 无画质选择对话框：立即用设置中的默认/最佳画质后台下载全部分P
+        int quality = SettingsActivity.getVideoQuality();
+        String qualityName = cn.ottohub.oh2013.download.VideoDownloadEnvironment.getQualityName(quality);
+        VideoDetailFragment fragment = videoDetailFragment;
+        if (fragment == null) {
+            Toast.makeText(this, this.getString(R.string.videodetailactivity_toast_8bf7_1), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        for (int i = 0; i < pages.size(); i++) {
+            fragment.prepareDownload(pages.get(i), quality, qualityName);
+        }
+    }
+
+    /** 详情加载完成后缓存分P，供相关/评论 Tab 下载使用 */
+    public void setCachedVideoPages(List<VideoDetailFragment.VideoPage> pages) {
+        if (pages == null) {
+            mCachedPages = null;
+            return;
+        }
+        mCachedPages = new ArrayList<VideoDetailFragment.VideoPage>(pages);
+    }
+
+    private class PageListAdapter extends BaseAdapter {
+        @Override
+        public int getCount() {
+            return mPages.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return mPages.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(final int position, View convertView, ViewGroup parent) {
+            ViewHolder holder;
+            if (convertView == null) {
+                convertView = getLayoutInflater().inflate(R.layout.item_download_page, parent, false);
+                holder = new ViewHolder();
+                holder.checkBox = (CheckBox) convertView.findViewById(R.id.checkbox);
+                holder.title = (TextView) convertView.findViewById(R.id.title);
+                convertView.setTag(holder);
+            } else {
+                holder = (ViewHolder) convertView.getTag();
+            }
+
+            VideoDetailFragment.VideoPage page = mPages.get(position);
+            String title = page.title;
+            if (title == null || title.length() == 0) {
+                title = "P" + (position + 1);
+            }
+            holder.title.setText((position + 1) + ". " + title);
+            holder.checkBox.setChecked(mPageChecked[position]);
+            holder.checkBox.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    mPageChecked[position] = ((CheckBox) v).isChecked();
+                }
+            });
+
+            convertView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    mPageChecked[position] = !mPageChecked[position];
+                    notifyDataSetChanged();
+                }
+            });
+
+            return convertView;
+        }
+    }
+
+    static class ViewHolder {
+        CheckBox checkBox;
+        TextView title;
+    }
+
+    // 下载权限待参数（权限请求成功后重试用）
+    private String mPendingVideoUrl;
+    private String mPendingTitle;
+    private String mPendingPageTitle;
+    private long mPendingAid;
+    private long mPendingCid;
+    private int mPendingPage;
+    private int mPendingQuality;
+    private String mPendingQualityName;
+    private String mPendingCoverUrl;
+    private String mPendingUpName;
+    private String mPendingBvid;
+    private String mPendingDescription;
+    private String mPendingTags;
+
+    public void startDownloadDirect(String videoUrl, String title, String pageTitle,
+                                    long aid, long cid, int page,
+                                    int quality, String qualityName,
+                                    String coverUrl, String upName, String bvid,
+                                    String description, String tags) {
+        if (!PermissionUtil.hasWriteStorage(this)) {
+            mPendingVideoUrl = videoUrl;
+            mPendingTitle = title;
+            mPendingPageTitle = pageTitle;
+            mPendingAid = aid;
+            mPendingCid = cid;
+            mPendingPage = page;
+            mPendingQuality = quality;
+            mPendingQualityName = qualityName;
+            mPendingCoverUrl = coverUrl;
+            mPendingUpName = upName;
+            mPendingBvid = bvid;
+            mPendingDescription = description;
+            mPendingTags = tags;
+            setPausingForTransient(true);
+            runWithStoragePermission(new Runnable() {
+                @Override
+                public void run() {
+                    startDownloadDirect(mPendingVideoUrl, mPendingTitle, mPendingPageTitle,
+                            mPendingAid, mPendingCid, mPendingPage,
+                            mPendingQuality, mPendingQualityName,
+                            mPendingCoverUrl, mPendingUpName, mPendingBvid,
+                            mPendingDescription, mPendingTags);
+                }
+            });
+            return;
+        }
+        VideoDownloadEnvironment env = new VideoDownloadEnvironment(
+                getDownloadDir(), aid, page);
+        if (env.getVideoFile().exists()) {
+            Toast.makeText(this, getString(R.string.videodetail_toast_exists, pageTitle), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        VideoDownloadService.startDownload(
+                this, aid, bvid, title, pageTitle, cid, page,
+                quality, qualityName, coverUrl, upName, videoUrl,
+                description, tags);
+        Toast.makeText(this, getString(R.string.videodetail_toast_queued, pageTitle), Toast.LENGTH_SHORT).show();
+    }
+
+    private File getDownloadDir() {
+        if (isSDCardAvailable() && PermissionUtil.hasWriteStorage(this)) {
+            File sdDownload = new File(Environment.getExternalStorageDirectory(), "OH2013/Download");
+            if (!sdDownload.exists()) sdDownload.mkdirs();
+            return sdDownload;
+        }
+        File internalDownload = new File(getFilesDir(), "Download");
+        if (!internalDownload.exists()) internalDownload.mkdirs();
+        return internalDownload;
+    }
+
+    private boolean isSDCardAvailable() {
+        String state = Environment.getExternalStorageState();
+        return Environment.MEDIA_MOUNTED.equals(state);
+    }
+
+    public void setVideoDetailFragment(Fragment fragment) {
+        this.videoDetailFragment = (VideoDetailFragment) fragment;
+        this.fragmentReady = true;
+        // 等 fragment 的 view 布局完成后重建焦点列表（此时标签/分P 可能尚未加载，
+        // 后续内容就绪时 updateTags → notifyTagsUpdated 会再次重建）
+        if (fragment != null && fragment.getView() != null) {
+            fragment.getView().post(new Runnable() {
+                @Override
+                public void run() {
+                    rebuildFocusableViews();
+                }
+            });
+        }
+    }
+
+    private void parseExternalUri(Uri data) {
+        String scheme = data.getScheme();
+        String host = data.getHost();
+        String path = data.getPath();
+
+        if ("bilibili".equals(scheme) && "video".equals(host)) {
+            List segments = data.getPathSegments();
+            if (segments != null && segments.size() > 0) {
+                String videoId = (String) segments.get(0);
+                if (videoId.startsWith("BV")) {
+                    bvid = videoId;
+                } else if (videoId.startsWith("av")) {
+                    try {
+                        aid = Long.parseLong(videoId.substring(2));
+                    } catch (NumberFormatException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+
+        if ("https".equals(scheme) && "www.bilibili.com".equals(host) && path != null && path.startsWith("/video/")) {
+            String videoId = path.substring(7);
+            if (videoId.startsWith("BV")) {
+                bvid = videoId;
+            }
+        }
+
+        if ("https".equals(scheme) && "b23.tv".equals(host) && path != null) {
+            String videoId = path.substring(1);
+            if (videoId.startsWith("BV")) {
+                bvid = videoId;
+            }
+        }
+    }
+
+    // 两个 Tab 的适配器（视频详情 + 评论）
+    private class TwoTabPagerAdapter extends FragmentPagerAdapter {
+        public TwoTabPagerAdapter(FragmentManager fm) {
+            super(fm);
+        }
+
+        @Override
+        public Fragment getItem(int position) {
+            if (position == 0) {
+                VideoDetailFragment fragment = new VideoDetailFragment();
+                Bundle args = new Bundle();
+                args.putLong("aid", aid);
+                if (bvid != null) {
+                    args.putString("bvid", bvid);
+                }
+                fragment.setArguments(args);
+                return fragment;
+            } else {
+                CommentFragment fragment = new CommentFragment();
+                Bundle args = new Bundle();
+                args.putLong("aid", aid);
+                if (bvid != null) {
+                    args.putString("bvid", bvid);
+                }
+                fragment.setArguments(args);
+                return fragment;
+            }
+        }
+
+        @Override
+        public int getCount() {
+            return 2;
+        }
+
+        @Override
+        public CharSequence getPageTitle(int position) {
+            if (position == 0) return getString(R.string.videodetail_tab_videodetail);
+            return getString(R.string.videodetail_tab_comment);
+        }
+    }
+
+    // 普通视频 ViewPager 适配器（三个 Tab）
+    private class VideoDetailPagerAdapter extends FragmentPagerAdapter {
+        public VideoDetailPagerAdapter(FragmentManager fm) {
+            super(fm);
+        }
+
+        @Override
+        public Fragment getItem(int position) {
+            long passAid = aid;
+            if (passAid == 0L) {
+                passAid = parseAidFromBvid(bvid);
+                if (passAid != 0L) {
+                    aid = passAid;
+                }
+            }
+            if (position == 0) {
+                VideoDetailFragment fragment = new VideoDetailFragment();
+                Bundle fragmentArgs = new Bundle();
+                fragmentArgs.putLong("aid", passAid);
+                if (bvid != null) {
+                    fragmentArgs.putString("bvid", bvid);
+                }
+                if (mOfflineMode) {
+                    fragmentArgs.putBoolean("offline_mode", true);
+                }
+                fragment.setArguments(fragmentArgs);
+                return fragment;
+            } else if (position == 1) {
+                RelatedVideosFragment fragment = new RelatedVideosFragment();
+                Bundle relatedArgs = new Bundle();
+                relatedArgs.putLong("aid", passAid);
+                if (bvid != null) {
+                    relatedArgs.putString("bvid", bvid);
+                }
+                fragment.setArguments(relatedArgs);
+                return fragment;
+            } else {
+                CommentFragment fragment = new CommentFragment();
+                Bundle commentArgs = new Bundle();
+                commentArgs.putLong("aid", passAid);
+                if (bvid != null) {
+                    commentArgs.putString("bvid", bvid);
+                }
+                fragment.setArguments(commentArgs);
+                return fragment;
+            }
+        }
+
+        @Override
+        public int getCount() {
+            return mOfflineMode ? 1 : 3;
+        }
+
+        @Override
+        public CharSequence getPageTitle(int position) {
+            if (position == 0) return getString(R.string.videodetail_tab_videodetail);
+            if (position == 1) return getString(R.string.videodetail_tab_related);
+            return getString(R.string.videodetail_tab_comment);
+        }
+    }
+
+    // 番剧 ViewPager 适配器（只有两个 Tab）
+    private class BangumiPagerAdapter extends FragmentPagerAdapter {
+        public BangumiPagerAdapter(FragmentManager fm) {
+            super(fm);
+        }
+
+        @Override
+        public Fragment getItem(int position) {
+            if (position == 0) {
+                return BangumiDetailFragment.newInstance(mBangumiMediaId);
+            } else {
+                CommentFragment fragment = new CommentFragment();
+                Bundle commentArgs = new Bundle();
+                commentArgs.putLong("aid", aid);
+                if (bvid != null) {
+                    commentArgs.putString("bvid", bvid);
+                }
+                fragment.setArguments(commentArgs);
+                return fragment;
+            }
+        }
+
+        @Override
+        public int getCount() {
+            return 2;
+        }
+
+        @Override
+        public CharSequence getPageTitle(int position) {
+            if (position == 0) return getString(R.string.videodetail_tab_bangumi);
+            return getString(R.string.videodetail_tab_comment);
+        }
+    }
+}

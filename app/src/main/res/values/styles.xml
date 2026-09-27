@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="PlayerControlBarButton" parent="">
+        <item name="android:background">@drawable/bili_player_control_item_background</item>
+        <item name="android:focusable">true</item>
+        <item name="android:scaleType">centerInside</item>
+        <item name="android:adjustViewBounds">true</item>
+    </style>
+
+    <style name="AppTheme" parent="android:Theme.Light.NoTitleBar">
+        <!-- 禁止用 tileMode=repeat 的 bitmap 作 windowBackground：
+             配合硬件加速时，多款机型会首帧白屏/整窗卡死。页面内可再用纹理底。 -->
+        <item name="android:windowBackground">@drawable/bili_texture_background</item>
+        <item name="android:tabStripEnabled">true</item>
+    </style>
+
+    <style name="PlayerTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+    </style>
+
+
+    <style name="DialogStyle_Holo" parent="android:Theme.Dialog">
+        <item name="android:windowMinWidthMajor">0dp</item>
+        <item name="android:windowMinWidthMinor">0dp</item>
+    </style>
+    <style name="DialogStyle_Material" parent="android:Theme.Dialog">
+        <item name="android:windowMinWidthMajor">0dp</item>
+        <item name="android:windowMinWidthMinor">0dp</item>
+    </style>
+
+    <!-- 自定义 Tab 文字样式 -->
+    <style name="TabTextStyle">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:ellipsize">marquee</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingTop">0dp</item>
+        <item name="android:paddingBottom">0dp</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:singleLine">true</item>
+    </style>
+
+    <style name="PlayerControlBarSpinner" parent="">
+        <item name="android:background">@drawable/bili_player_control_item_background</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <style name="PlayerControlBarButtonWithText" parent="@style/PlayerControlBarButton">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/_text__white</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:drawablePadding">4dp</item>
+    </style>
+
+    <style name="Widget.App.Seekbar.Player" parent="@android:attr/progressBarStyleHorizontal">
+        <item name="android:progressDrawable">@drawable/media_player_progress_pink</item>
+        <item name="android:thumb">@drawable/bili_player_seekbar_thumb</item>
+        <item name="android:thumbOffset">1dp</item>
+        <item name="android:maxHeight">2dp</item>
+        <item name="android:minHeight">2dp</item>
+    </style>
+
+    <style name="Widget.App.Seekbar.Holo" parent="@android:attr/progressBarStyleHorizontal">
+        <item name="android:progressDrawable">@drawable/media_player_progress_pink</item>
+        <item name="android:thumb">@drawable/abcp_pink__scrubber_control_holo</item>
+        <item name="android:thumbOffset">12dp</item>
+        <item name="android:maxHeight">2dp</item>
+        <item name="android:minHeight">2dp</item>
+    </style>
+
+    <style name="CommonUnderline" parent="">
+        <item name="android:background">@color/underline_color</item>
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+    </style>
+
+    <style name="AboutBodyText">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">#CCCCCC</item>
+    </style>
+
+    <style name="AboutTableText" parent="@style/AboutBodyText">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_weight">1</item>
+    </style>
+
+    <style name="PlayerOptionsMenuItem" parent="">
+        <item name="android:textSize">14sp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:background">@drawable/bili_player_control_item_background</item>
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">40dp</item>
+    </style>
+
+    <style name="PlayerOptionsPannelItemText" parent="">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/videoplay__video_title_text</item>
+        <item name="android:gravity">center_vertical</item>
+    </style>
+
+    <style name="PlayerOptionsPannelItemTitle" parent="@style/PlayerOptionsPannelItemText">
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">1dp</item>
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+    </style>
+
+    <style name="PlayerOptionsPannelItemCheckbox" parent="">
+        <item name="android:textSize">11sp</item>
+        <item name="android:textColor">@color/videoplay__video_title_text</item>
+        <item name="android:gravity">center_horizontal</item>
+        <item name="android:background">@drawable/bili_player_control_item_background</item>
+        <item name="android:paddingLeft">6dp</item>
+        <item name="android:paddingTop">5dp</item>
+        <item name="android:paddingRight">3dp</item>
+        <item name="android:paddingBottom">5dp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:button">@null</item>
+    </style>
+
+    <style name="Widget.App.Panel.ListItem" parent="">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/videoplay__video_title_text</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+        <item name="android:paddingLeft">16dp</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingRight">16dp</item>
+        <item name="android:paddingBottom">8dp</item>
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+    </style>
+
+    <style name="Widget.App.Light.ProgressBar.Vertical" parent="@android:style/Widget.ProgressBar.Horizontal">
+        <item name="android:progressDrawable">@drawable/media_player_media_level_pink</item>
+        <item name="android:indeterminateOnly">false</item>
+        <item name="android:minWidth">22dp</item>
+        <item name="android:maxWidth">22dp</item>
+    </style>
+
+    <style name="TitleBarChildView" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="android:adjustViewBounds">true</item>
+    </style>
+
+    <style name="TitleBarButton" parent="@style/TitleBarChildView">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+    </style>
+
+    <style name="LoginText" parent="">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">@color/videobrief__title_text</item>
+        <item name="android:gravity">center|left</item>
+        <item name="android:layout_gravity">center</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:singleLine">true</item>
+    </style>
+
+    <style name="LoginInput" parent="@style/LoginText">
+    </style>
+
+    <style name="DanmakuInputOptionRadioButton" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginLeft">8dp</item>
+        <item name="android:layout_marginRight">8dp</item>
+        <item name="android:button">@null</item>
+    </style>
+
+    <style name="DanmakuInputOptionColorRadioButton" parent="">
+        <item name="android:background">@color/_bkgd__white_abs</item>
+        <item name="android:layout_width">32dp</item>
+        <item name="android:layout_height">25dp</item>
+        <item name="android:layout_marginLeft">@dimen/player_danmaku_input_options_color_radio_btn_margin</item>
+        <item name="android:layout_marginRight">@dimen/player_danmaku_input_options_color_radio_btn_margin</item>
+        <item name="android:button">@drawable/ic_btn_player_danmaku_input_options_color</item>
+    </style>
+
+    <style name="Animation_SidePannel" parent="">
+        <item name="android:windowEnterAnimation">@anim/options_pannel_in</item>
+        <item name="android:windowExitAnimation">@anim/options_pannel_out</item>
+    </style>
+
+</resources>

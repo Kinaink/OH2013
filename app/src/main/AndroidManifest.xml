@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="cn.ottohub.oh2013"
+    android:installLocation="auto">
+
+    <!-- 权限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_DOWNLOAD_MANAGER" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <application
+        android:name=".BiliApplication"
+        android:hardwareAccelerated="true"
+        android:allowBackup="true"
+        android:largeHeap="true"
+        android:resizeableActivity="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme" >
+
+        <activity
+            android:name=".BaseActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".CrashReportActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".ImageViewerActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".ReplyListActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".ChannelDetailActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".BlogDetailActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".BlogPublishActivity"
+            android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".BlogCommentActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".ImChatActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".MedalWallActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".PartitionDetailActivity"
+            android:screenOrientation="unspecified"/>
+
+        <activity
+            android:name=".SetupActivity"
+            android:screenOrientation="unspecified"
+            android:hardwareAccelerated="true" />
+
+        <activity
+            android:name=".KeyBindingSetupActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".WebViewActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- MainActivity -->
+        <activity
+            android:name=".MainActivity"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:hardwareAccelerated="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".tv.TvMainActivity"
+            android:configChanges="orientation|screenSize"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <activity
+            android:name=".tv.TvSettingsActivity"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <activity
+            android:name=".SearchActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- AboutActivity -->
+        <activity
+            android:name=".AboutActivity"
+            android:theme="@android:style/Theme.Black.NoTitleBar"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".VideoDetailActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".DeviceInfoActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".UserProfileActivity"
+            android:screenOrientation="unspecified"/>
+
+        <!-- 注册 LoginActivity -->
+        <activity
+            android:name=".LoginActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 HistoryActivity -->
+        <activity
+            android:name=".HistoryActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 FollowingListActivity（关注的人） -->
+        <activity
+            android:name=".FollowingListActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 SettingsActivity -->
+        <activity
+            android:name=".SettingsActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 解码设置 -->
+        <activity
+            android:name=".subsettings.DecoderSettingsActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 OfflineActivity -->
+        <activity
+            android:name=".OfflineActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 LoginActivity -->
+        <activity
+            android:name=".FavoriteVideoListActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 FavoriteFolderActivity -->
+        <activity
+            android:name=".FavoriteFolderListActivity"
+            android:screenOrientation="unspecified" />
+
+        <!-- 注册 PlayerAnimActivity -->
+        <activity
+            android:name=".player.PlayerAnimActivity"
+            android:hardwareAccelerated="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize"
+            android:theme="@style/PlayerTheme" />
+
+        <!-- 简易在线播放器（Ostwind，兼容 Android 2.2 及以下，MediaPlayer + 本地代理） -->
+        <activity
+            android:name=".player.OstwindPlayerActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="landscape"
+            android:theme="@style/PlayerTheme" />
+
+        <!-- 注册 LoginActivity -->
+        <activity
+            android:name=".SpecialLoginActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".MetroHomeActivity"
+            android:screenOrientation="unspecified" />
+
+        <activity
+            android:name=".player.BiliPlayerActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/PlayerTheme" />
+
+        <!-- 视频下载后台服务 -->
+        <service
+            android:name=".download.VideoDownloadService"
+            android:exported="false" />
+
+        <!-- 更新检查后台服务 -->
+        <service
+            android:name=".util.UpdateCheckService"
+            android:exported="false" />
+
+        <!-- 私信未读轮询（应用内推送，无厂商离线推送） -->
+        <service
+            android:name=".util.ImNotifyService"
+            android:exported="false" />
+
+        <!-- 外部播放器在线播放本地代理持有服务 -->
+        <service
+            android:name=".ProxyStreamService"
+            android:exported="false" />
+
+        <!-- 桌面搜索小工具 -->
+        <receiver
+            android:name=".widget.SearchWidgetProvider">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/search_widget_info" />
+        </receiver>
+
+        <!-- FileProvider（兼容 minSdkVersion 4 的自实现） -->
+        <provider
+            android:name=".util.FileProviderCompat"
+            android:authorities="cn.ottohub.oh2013.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+
+</manifest>

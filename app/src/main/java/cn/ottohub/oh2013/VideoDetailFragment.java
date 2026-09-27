@@ -1,0 +1,1371 @@
+/*
+ * 本软件基于以下项目修改，致谢前辈：
+ *   - 哔哩终端 (BiliTerminal) by RobinNotBad
+ *   - 腕上哔哩 (WristBilibili) by luern0313
+ *
+ * 本程序是自由软件，遵循 GNU 通用公共许可证第 3 版（或更高版本）发布。
+ * 你可以重新分发或修改它，希望它能为你带来快乐。
+ *
+ * 详情请参阅 GNU 通用公共许可证：
+ * <https://www.gnu.org/licenses/>
+ *
+ * 修改者：一只毛子球 (BiliClassic)
+ * 修改时间：2026年7月12日
+ *
+ * 安卓2也要看B站！
+ */
+package cn.ottohub.oh2013;
+
+
+import cn.ottohub.oh2013.util.NetWorkUtil;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Paint;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.support.v4.app.Fragment;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+import android.widget.ProgressBar;
+
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+
+import cn.ottohub.oh2013.api.PlayerApi;
+import cn.ottohub.oh2013.api.VideoInfoApi;
+import cn.ottohub.oh2013.download.VideoDownloadEnvironment;
+import cn.ottohub.oh2013.model.PlayerData;
+import cn.ottohub.oh2013.model.Stats;
+import cn.ottohub.oh2013.model.VideoInfo;
+import cn.ottohub.oh2013.model.VideoPart;
+import cn.ottohub.oh2013.model.UserInfo;
+import cn.ottohub.oh2013.player.PlayerAnimActivity;
+import cn.ottohub.oh2013.util.FileProviderCompat;
+import cn.ottohub.oh2013.util.GlobalImageCache;
+import cn.ottohub.oh2013.util.PermissionUtil;
+import cn.ottohub.oh2013.player.BiliPlayerActivity;
+
+import cn.ottohub.oh2013.util.SdkHelper;
+public class VideoDetailFragment extends Fragment {
+
+    public static class VideoPage {
+        public long cid;
+        public String title;
+        public int page;
+    }
+
+
+    private ImageView ivCover;
+    private ImageView ivUpAvatar;
+    private TextView tvTitle, tvUpName, tvUpNameNew, tvPlay, tvDanmaku, tvDesc, tvPartCount, tvPubDate;
+    private Button btnPlay;
+    private ObservableListView lvParts;
+    private LinearLayout tagsContainer;
+    private ProgressBar progressBar;
+    private TextView btnLikeText;
+    private TextView btnFavoriteText;
+
+    private VideoPartAdapter partAdapter;
+    private ArrayList<VideoPart> partList = new ArrayList<VideoPart>();
+    private List<VideoPage> videoPages = new ArrayList<VideoPage>();
+
+    private long aid;
+    private String bvid;
+    public VideoInfo videoInfo;
+    private int currentPartIndex = 0;
+    private String[] tags = {"", "", "", "", "", "", "", "", ""};
+    // 保存有效标签列表，供 Activity 焦点系统弹标签选择对话框
+    private ArrayList<String> mValidTags = new ArrayList<String>();
+
+    private boolean mOfflineMode;
+
+    // 防连点
+    private boolean isPlayButtonClicked = false;
+    private Handler mHandler = new Handler();
+    private ScrollView mScrollView;
+
+    // Android 2.x 上 setImageResource 每次可能重新解码资源图，缓存默认 Drawable 实例复用
+    private static android.graphics.drawable.Drawable sDefaultCoverDrawable;
+
+    private void setDefaultCover(ImageView iv) {
+        if (iv == null) return;
+        if (sDefaultCoverDrawable == null) {
+            try {
+                sDefaultCoverDrawable = getResources().getDrawable(R.drawable.bili_default_image_tv_with_bg);
+            } catch (Throwable t) {
+                sDefaultCoverDrawable = null;
+            }
+        }
+        if (sDefaultCoverDrawable != null && iv.getDrawable() != sDefaultCoverDrawable) {
+            iv.setImageDrawable(sDefaultCoverDrawable);
+        }
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_video_detail, container, false);
+
+        ivCover = (ImageView) view.findViewById(R.id.iv_cover);
+        ivUpAvatar = (ImageView) view.findViewById(R.id.iv_up_avatar);
+        tvTitle = (TextView) view.findViewById(R.id.tv_title);
+        tvUpName = (TextView) view.findViewById(R.id.tv_up_name);
+        tvUpNameNew = (TextView) view.findViewById(R.id.tv_up_name_new);
+        tvPlay = (TextView) view.findViewById(R.id.tv_play);
+        tvDanmaku = (TextView) view.findViewById(R.id.tv_danmaku);
+        tvDesc = (TextView) view.findViewById(R.id.tv_desc);
+        tvPartCount = (TextView) view.findViewById(R.id.tv_part_count);
+        tvPubDate = (TextView) view.findViewById(R.id.tv_pubdate);
+        btnPlay = (Button) view.findViewById(R.id.btn_play);
+        lvParts = (ObservableListView) view.findViewById(R.id.lv_parts);
+        tagsContainer = (LinearLayout) view.findViewById(R.id.tags_container);
+        if (tagsContainer != null) {
+            tagsContainer.setVisibility(View.GONE);
+        }
+        progressBar = (ProgressBar) view.findViewById(R.id.progress_bar);
+        btnLikeText = (TextView) view.findViewById(R.id.btn_like_text);
+        btnFavoriteText = (TextView) view.findViewById(R.id.btn_favorite_text);
+        if (getActivity() instanceof VideoDetailActivity) {
+            ((VideoDetailActivity) getActivity()).bindDetailActionButtons(btnLikeText, btnFavoriteText);
+        }
+
+        // UP 名：灰色，无下划线；头像可点进用户空间
+        tvUpNameNew.setTextColor(0xFF666666);
+
+        Bundle args = getArguments();
+        if (args != null) {
+            aid = args.getLong("aid", 0);
+            bvid = args.getString("bvid");
+            mOfflineMode = args.getBoolean("offline_mode", false);
+        }
+
+        partAdapter = new VideoPartAdapter(getActivity(), partList);
+        lvParts.setAdapter(partAdapter);
+
+        partAdapter.setOnPartClickListener(new VideoPartAdapter.OnPartClickListener() {
+            @Override
+            public void onPartClick(VideoPart part, int position) {
+                currentPartIndex = position;
+                partAdapter.setSelectedPosition(position);
+                playVideo();
+            }
+        });
+
+        btnPlay.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                playVideo();
+            }
+        });
+
+        showNullTag();
+        loadVideoData();
+
+        return view;
+    }
+
+    @Override
+    public void onViewCreated(View view, Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+
+        if (lvParts != null) {
+            lvParts.setFocusable(false);
+            lvParts.setFocusableInTouchMode(false);
+        }
+
+        mScrollView = (ScrollView) view.findViewById(R.id.scroll_view);
+        if (mScrollView != null) {
+            // 触摸屏不请求焦点，避免内部可聚焦子项（如播放按钮）抢焦点把滚动拉下；
+            // 滚动到顶由数据加载完成后的 forceScrollToTop 负责
+            mScrollView.setFocusableInTouchMode(false);
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // 重置防连点
+        isPlayButtonClicked = false;
+        // 滚动到顶部由数据加载完成后的 forceScrollToTop 负责，这里不重复触发
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        mHandler.removeCallbacksAndMessages(null);
+        clearImages();
+    }
+
+    // 强制滚动到顶部
+    private void forceScrollToTop() {
+        if (mScrollView == null) return;
+        // 数据加载（setText）会改变内容高度并调整 scrollY，延迟到重排稳定后再滚一次
+        mScrollView.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                mScrollView.scrollTo(0, 0);
+            }
+        }, 100);
+    }
+
+    public void clearImages() {
+        if (ivCover != null) {
+            try {
+                ivCover.setImageBitmap(null);
+                ivCover.setImageResource(R.drawable.bili_default_image_tv_with_bg);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        if (partList != null) {
+            partList.clear();
+        }
+        if (videoPages != null) {
+            videoPages.clear();
+        }
+        if (lvParts != null) {
+            lvParts.setAdapter(null);
+        }
+    }
+
+    private void showNullTag() {
+        if (!isAdded() || getActivity() == null) return;
+        if (tagsContainer == null) return;
+        tagsContainer.removeAllViews();
+        TextView nullTag = createTagView("null");
+        nullTag.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (isAdded() && getActivity() != null) searchTag("null");
+            }
+        });
+        tagsContainer.addView(nullTag);
+    }
+
+    private TextView createTagView(String text) {
+        if (!isAdded() || getActivity() == null) return new TextView(getActivity());
+        TextView tagView = new TextView(getActivity());
+        tagView.setText(text);
+        tagView.setTextColor(0xFFFF8C00);
+        tagView.setTextSize(12);
+        tagView.setPadding(0, 0, 12, 0);
+        tagView.setPaintFlags(tagView.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
+        return tagView;
+    }
+
+    public void searchTag(String keyword) {
+        if (!isAdded() || getActivity() == null) return;
+        if (keyword == null || keyword.length() == 0) return;
+        Intent intent = new Intent(getActivity(), SearchActivity.class);
+        intent.putExtra("keyword", keyword);
+        startActivity(intent);
+    }
+
+    // ===== 供 Activity 焦点系统调用的接口 =====
+
+    public ArrayList<String> getValidTags() {
+        return mValidTags;
+    }
+
+    public int getPartCount() {
+        return partList != null ? partList.size() : 0;
+    }
+
+    public int getCurrentPartIndex() {
+        return currentPartIndex;
+    }
+
+    /**
+     * 选中某个分P（高亮 + 滚动可见），不触发播放。
+     */
+    public void selectPart(int position) {
+        if (partList == null || position < 0 || position >= partList.size()) {
+            return;
+        }
+        currentPartIndex = position;
+        if (partAdapter != null) {
+            partAdapter.setSelectedPosition(position);
+        }
+        if (lvParts != null) {
+            // setSelection 为 API 1，兼容 Android 2.x；smoothScrollToPosition 需 API 8
+            lvParts.setSelection(position);
+        }
+    }
+
+    /**
+     * 选中并播放某个分P。
+     */
+    public void playPart(int position) {
+        if (partList == null || position < 0 || position >= partList.size()) {
+            return;
+        }
+        currentPartIndex = position;
+        if (partAdapter != null) {
+            partAdapter.setSelectedPosition(position);
+        }
+        playVideo();
+    }
+
+    /**
+     * 返回本 Fragment 的根 ScrollView，供 Activity 焦点移动时联动滚动。
+     */
+    public ScrollView getScrollView() {
+        View v = getView();
+        if (v != null) {
+            return (ScrollView) v.findViewById(R.id.scroll_view);
+        }
+        return null;
+    }
+
+    public List<VideoPage> getVideoPages() {
+        return videoPages;
+    }
+
+    // 下载：准备阶段（解析视频地址+获取可用画质）
+
+    public void prepareDownload(final VideoPage page, final int quality, final String qualityName) {
+        if (!isAdded() || getActivity() == null) return;
+        if (page == null) {
+            Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_5206), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (page.cid == 0) {
+            Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_65e0), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final long realAid = (videoInfo != null && videoInfo.aid != 0) ? videoInfo.aid : aid;
+        if (realAid == 0) {
+            Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_65e0), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final String upName = (videoInfo != null && videoInfo.staff != null && videoInfo.staff.size() > 0)
+                ? videoInfo.staff.get(0).name : "";
+        final String coverUrl = (videoInfo != null) ? videoInfo.cover : "";
+        final String desc = (videoInfo != null && videoInfo.description != null) ? videoInfo.description : "";
+        final String tagsStr = (videoInfo != null && videoInfo.tags != null) ? videoInfo.tags : "";
+        final String mainTitle = (videoInfo != null) ? videoInfo.title : page.title;
+        final String bvidStr = (videoInfo != null) ? videoInfo.bvid : null;
+
+        Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_6b63), Toast.LENGTH_SHORT).show();
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    PlayerData playerData = new PlayerData();
+                    playerData.aid = realAid;
+                    playerData.cid = page.cid;
+                    playerData.title = page.title;
+                    playerData.qn = quality;
+
+                    PlayerApi.getVideo(playerData, true);
+                    String videoUrl = playerData.videoUrl;
+                    final int dlQuality;
+                    final String dlQualityName;
+                    // 转码下载：转码开启时下载 240P 转码输出（老设备可播、体积小）
+                    if (cn.ottohub.oh2013.util.ConvertPlayUtil.isConvertEnabled()) {
+                        String conv = cn.ottohub.oh2013.util.ConvertPlayUtil.convertPlayUrl(videoUrl, page.title);
+                        if (conv != null && conv.length() > 0) {
+                            videoUrl = conv;
+                            dlQuality = 6; // 240P
+                            dlQualityName = VideoDownloadEnvironment.getQualityName(6);
+                        } else {
+                            dlQuality = quality;
+                            dlQualityName = qualityName;
+                        }
+                    } else {
+                        dlQuality = quality;
+                        dlQualityName = qualityName;
+                    }
+
+                    final String finalUrl = videoUrl;
+
+                    final long tempAid = realAid;
+                    final String tempTitle = mainTitle;
+                    final String tempPageTitle = page.title;
+                    final long tempCid = page.cid;
+                    final int tempPage = page.page;
+
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                if (finalUrl != null && finalUrl.length() > 0) {
+                                    if (getActivity() instanceof VideoDetailActivity) {
+                                        ((VideoDetailActivity) getActivity()).startDownloadDirect(
+                                                finalUrl, tempTitle, tempPageTitle,
+                                                tempAid, tempCid, tempPage,
+                                                dlQuality, dlQualityName,
+                                                coverUrl, upName, bvidStr, desc, tagsStr);
+                                    }
+                                } else {
+                                    Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_83b7), Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        });
+                    }
+                } catch (final Exception e) {
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                Toast.makeText(getActivity(), "获取下载地址失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private int getSafeQuality() {
+        // 转码播放时强制 360P：老设备软解/转码性能有限，取更高画质反而白白增加转码耗时与流量
+        if (cn.ottohub.oh2013.util.ConvertPlayUtil.isConvertEnabled()) {
+            return 16; // 360P
+        }
+        return SettingsActivity.getVideoQuality();
+    }
+
+
+    // 数据加载
+
+    private void loadVideoData() {
+        if (!isAdded() || getActivity() == null) return;
+        tvTitle.setText(getString(R.string.videodetailfragment_settext_52a0));
+        if (progressBar != null) {
+            progressBar.setVisibility(View.VISIBLE);
+        }
+
+        if (mOfflineMode) {
+            loadVideoDataFromOffline();
+            return;
+        }
+
+        final long finalAid = aid;
+        final String finalBvid = bvid;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (finalAid != 0) {
+                        videoInfo = VideoInfoApi.getVideoInfo(finalAid);
+                        loadTags(finalAid);
+                    } else if (finalBvid != null && finalBvid.length() > 0) {
+                        videoInfo = VideoInfoApi.getVideoInfo(finalBvid);
+                        loadTags(finalBvid);
+                    } else {
+                        if (getActivity() != null) {
+                            getActivity().runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                if (progressBar != null) progressBar.setVisibility(View.GONE);
+                                tvTitle.setText(getString(R.string.videodetailfragment_settext_53c2));
+                                Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_7f3a), Toast.LENGTH_SHORT).show();
+                            }
+                            });
+                        }
+                        return;
+                    }
+
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                displayVideoInfo();
+                            }
+                        });
+                    }
+                } catch (final Exception e) {
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                if (progressBar != null) progressBar.setVisibility(View.GONE);
+                                tvTitle.setText(getString(R.string.videodetailfragment_settext_52a0_1));
+                                Toast.makeText(getActivity(), "加载失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                    }
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+    }
+
+    private void loadVideoDataFromOffline() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    java.io.File downloadDir;
+                    if (PermissionUtil.hasWriteStorage(getActivity())) {
+                        downloadDir = new java.io.File(
+                                android.os.Environment.getExternalStorageDirectory(), "BiliClassic/Download");
+                        if (!downloadDir.isDirectory()) {
+                            downloadDir = null;
+                        }
+                    } else {
+                        downloadDir = null;
+                    }
+                    if (downloadDir == null) {
+                        downloadDir = new java.io.File(getActivity().getFilesDir(), "Download");
+                    }
+
+                    cn.ottohub.oh2013.download.VideoDownloadEnvironment env =
+                            new cn.ottohub.oh2013.download.VideoDownloadEnvironment(downloadDir);
+                    final java.util.ArrayList<cn.ottohub.oh2013.download.VideoDownloadEntry> entries =
+                            env.loadEntriesForAvid(aid);
+
+                    videoInfo = new VideoInfo();
+                    videoInfo.aid = aid;
+                    if (entries != null && entries.size() > 0) {
+                        cn.ottohub.oh2013.download.VideoDownloadEntry firstEntry = entries.get(0);
+                        videoInfo.title = firstEntry.title != null ? firstEntry.title
+                                : cn.ottohub.oh2013.util.Terminology.videoId(aid);
+                        videoInfo.cover = firstEntry.coverUrl;
+                        videoInfo.description = firstEntry.description;
+                        videoInfo.tags = firstEntry.tags;
+                        videoInfo.pagenames = new java.util.ArrayList<String>();
+                        videoInfo.cids = new java.util.ArrayList<Long>();
+                        videoInfo.pages = new java.util.ArrayList<Integer>();
+                        for (cn.ottohub.oh2013.download.VideoDownloadEntry e : entries) {
+                            videoInfo.pagenames.add(e.pageTitle != null ? e.pageTitle : "P" + e.page);
+                            videoInfo.cids.add(e.cid);
+                            videoInfo.pages.add(e.page);
+                        }
+                        if (firstEntry.upName != null && firstEntry.upName.length() > 0) {
+                            videoInfo.staff = new java.util.ArrayList<UserInfo>();
+                            UserInfo up = new UserInfo();
+                            up.name = firstEntry.upName;
+                            videoInfo.staff.add(up);
+                        }
+                        videoInfo.stats = new Stats();
+                    } else {
+                        videoInfo.title = cn.ottohub.oh2013.util.Terminology.videoId(aid) + " (未找到缓存数据)";
+                        videoInfo.pagenames = new java.util.ArrayList<String>();
+                        videoInfo.pagenames.add("P1");
+                        videoInfo.cids = new java.util.ArrayList<Long>();
+                        videoInfo.cids.add(0L);
+                    }
+
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                displayVideoInfo();
+                                if (videoInfo.tags != null && videoInfo.tags.length() > 0) {
+                                    String[] splitTags = videoInfo.tags.split("/");
+                                    for (int i = 0; i < splitTags.length && i < 9; i++) {
+                                        tags[i] = splitTags[i];
+                                    }
+                                }
+                                updateTags();
+                            }
+                        });
+                    }
+                } catch (final Exception e) {
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                tvTitle.setText(getString(R.string.videodetailfragment_settext_79bb));
+                            }
+                        });
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private void loadTags(final long finalAid) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String tagsStr = VideoInfoApi.getTags(finalAid);
+                    if (tagsStr != null && tagsStr.length() > 0) {
+                        String[] splitTags = tagsStr.split("/");
+                        for (int i = 0; i < splitTags.length && i < 9; i++) {
+                            tags[i] = splitTags[i];
+                        }
+                        if (videoInfo != null) videoInfo.tags = tagsStr;
+                    }
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                updateTags();
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                updateTags();
+                            }
+                        });
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private void loadTags(final String finalBvid) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String tagsStr = VideoInfoApi.getTags(finalBvid);
+                    if (tagsStr != null && tagsStr.length() > 0) {
+                        String[] splitTags = tagsStr.split("/");
+                        for (int i = 0; i < splitTags.length && i < 9; i++) {
+                            tags[i] = splitTags[i];
+                        }
+                        if (videoInfo != null) videoInfo.tags = tagsStr;
+                    }
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                updateTags();
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                updateTags();
+                            }
+                        });
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private void updateTags() {
+        if (!isAdded() || getActivity() == null) return;
+        if (tagsContainer == null) return;
+
+        tagsContainer.removeAllViews();
+        List<String> validTags = new ArrayList<String>();
+        for (int i = 0; i < tags.length; i++) {
+            String tagText = tags[i];
+            if (tagText != null && tagText.length() > 0) validTags.add(tagText);
+        }
+        mValidTags.clear();
+        mValidTags.addAll(validTags);
+        if (getActivity() instanceof VideoDetailActivity) {
+            ((VideoDetailActivity) getActivity()).notifyTagsUpdated();
+        }
+
+        if (validTags.size() == 0) {
+            TextView nullTag = createTagView("null");
+            nullTag.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (isAdded() && getActivity() != null) searchTag("null");
+                }
+            });
+            tagsContainer.addView(nullTag);
+            return;
+        }
+
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int usedWidth = 0;
+        LinearLayout currentRow = null;
+
+        for (int i = 0; i < validTags.size(); i++) {
+            final String tagText = validTags.get(i);
+            TextView tagView = createTagView(tagText);
+            tagView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (isAdded() && getActivity() != null) searchTag(tagText);
+                }
+            });
+            // 用 Paint.measureText 估算宽度（远快于 TextView.measure 的完整测量 pass，1.6 上 CJK 测量慢）
+            float textWidth = tagView.getPaint().measureText(tagText);
+            int tagWidth = (int) (textWidth + tagView.getPaddingLeft() + tagView.getPaddingRight() + 0.5f);
+            if (currentRow == null || usedWidth + tagWidth > screenWidth - 20) {
+                currentRow = new LinearLayout(getActivity());
+                currentRow.setOrientation(LinearLayout.HORIZONTAL);
+                currentRow.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                tagsContainer.addView(currentRow);
+                usedWidth = 0;
+            }
+            currentRow.addView(tagView);
+            usedWidth += tagWidth;
+        }
+    }
+
+    private void displayVideoInfo() {
+        if (!isAdded() || getActivity() == null) return;
+        if (progressBar != null) {
+            progressBar.setVisibility(View.GONE);
+        }
+        if (videoInfo == null) {
+            tvTitle.setText(getString(R.string.videodetailfragment_settext_83b7));
+            return;
+        }
+
+        // Keep activity aid in sync for related/comment tabs
+        if (videoInfo.aid != 0 && getActivity() instanceof VideoDetailActivity) {
+            ((VideoDetailActivity) getActivity()).ensureAid(videoInfo.aid);
+        }
+
+        tvTitle.setText(videoInfo.title);
+
+        if (videoInfo.staff != null && videoInfo.staff.size() > 0) {
+            final UserInfo staff = videoInfo.staff.get(0);
+            tvUpNameNew.setText(staff.name);
+            if (ivUpAvatar != null && staff.avatar != null && staff.avatar.length() > 0) {
+                int avSize = (int) (getResources().getDisplayMetrics().density * 32);
+                cn.ottohub.oh2013.util.CoverImageLoader.loadIntoCircle(
+                        getActivity(), ivUpAvatar, staff.avatar, avSize);
+            }
+            View.OnClickListener openUpProfile = new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (!isAdded() || getActivity() == null) return;
+                    if (staff.mid != 0) {
+                        Intent intent = new Intent(getActivity(), UserProfileActivity.class);
+                        intent.putExtra("mid", staff.mid);
+                        startActivity(intent);
+                    } else {
+                        Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_65e0), Toast.LENGTH_SHORT).show();
+                    }
+                }
+            };
+            tvUpNameNew.setOnClickListener(openUpProfile);
+            if (ivUpAvatar != null) {
+                ivUpAvatar.setOnClickListener(openUpProfile);
+            }
+        } else {
+            tvUpNameNew.setText(getString(R.string.videodetailfragment_settext_672a));
+        }
+
+        if (videoInfo.stats != null) {
+            tvPlay.setText("播放: " + videoInfo.stats.view);
+            tvDanmaku.setText("弹幕: " + videoInfo.stats.danmaku);
+        }
+
+        if (videoInfo.description != null && videoInfo.description.length() > 0) {
+            tvDesc.setText(videoInfo.description);
+            tvDesc.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    android.text.ClipboardManager cm = (android.text.ClipboardManager)
+                            getActivity().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setText(videoInfo.description);
+                        android.widget.Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_7b80), android.widget.Toast.LENGTH_SHORT).show();
+                    }
+                    return true;
+                }
+            });
+        } else {
+            tvDesc.setText(getString(R.string.videodetailfragment_settext_6682));
+            tvDesc.setOnLongClickListener(null);
+        }
+
+        if (tvPubDate != null) {
+            if (videoInfo.pubdate > 0) {
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+                String dateStr = sdf.format(new Date(videoInfo.pubdate * 1000L));
+                tvPubDate.setText("发布时间: " + dateStr);
+            } else if (videoInfo.timeDesc != null && videoInfo.timeDesc.length() > 0) {
+                tvPubDate.setText("发布时间: " + videoInfo.timeDesc);
+            } else {
+                tvPubDate.setText(getString(R.string.videodetailfragment_settext_53d1));
+            }
+            tvPubDate.setVisibility(View.VISIBLE);
+        }
+
+        // 异步拉取真实弹幕条数（与播放器一致）
+        refreshDanmakuCount(videoInfo.aid);
+
+        videoPages.clear();
+        if (videoInfo.pagenames != null && videoInfo.pagenames.size() > 0) {
+            partList.clear();
+            for (int i = 0; i < videoInfo.pagenames.size(); i++) {
+                String partTitle = videoInfo.pagenames.get(i);
+                long cid = videoInfo.cids.get(i);
+                partList.add(new VideoPart(i + 1, partTitle, cid));
+
+                VideoPage page = new VideoPage();
+                page.cid = cid;
+                page.title = partTitle;
+                page.page = i + 1;
+                videoPages.add(page);
+            }
+            tvPartCount.setText("共" + partList.size() + "段视频");
+            partAdapter.notifyDataSetChanged();
+        } else {
+            tvPartCount.setText(getString(R.string.videodetailfragment_settext_5171));
+            partList.clear();
+            partList.add(new VideoPart(1, videoInfo.title, 0));
+            partAdapter.notifyDataSetChanged();
+
+            VideoPage page = new VideoPage();
+            page.cid = 0;
+            page.title = videoInfo.title;
+            page.page = 1;
+            videoPages.add(page);
+        }
+
+        loadCoverImage(videoInfo.cover);
+
+        if (getActivity() instanceof VideoDetailActivity) {
+            VideoDetailActivity act = (VideoDetailActivity) getActivity();
+            act.setVideoDetailFragment(this);
+            act.setCachedVideoPages(videoPages);
+        }
+
+        // 数据加载完成后滚动到顶部（forceScrollToTop 内部延迟，等 setText 重排稳定）
+        if (isAdded()) {
+            forceScrollToTop();
+        }
+    }
+
+    private void refreshDanmakuCount(final long vid) {
+        if (vid <= 0) return;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final int count = cn.ottohub.oh2013.api.OttoDanmakuUtil.countDanmaku(vid);
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!isAdded() || getActivity() == null) return;
+                        if (videoInfo != null && videoInfo.stats != null) {
+                            videoInfo.stats.danmaku = count;
+                        }
+                        if (tvDanmaku != null) {
+                            tvDanmaku.setText("弹幕: " + count);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void loadCoverImage(String url) {
+        if (!isAdded() || getActivity() == null) return;
+        url = cn.ottohub.oh2013.util.ImageUrlUtil.resolve(url);
+        if (url == null || url.length() == 0) return;
+        final String finalUrl = url;
+
+        Bitmap cached = GlobalImageCache.getInstance().get(finalUrl);
+        if (cached != null && !cached.isRecycled()) {
+            ivCover.setImageBitmap(cached);
+            return;
+        }
+
+        int coverW = (int) (getResources().getDisplayMetrics().density * 200);
+        int coverH = (int) (getResources().getDisplayMetrics().density * 150);
+        cn.ottohub.oh2013.util.CoverImageLoader.loadInto(getActivity(), ivCover, finalUrl, coverW, coverH);
+    }
+
+    private Bitmap downloadCover(String urlStr, java.io.File diskFile) {
+        HttpURLConnection conn = null;
+        java.io.File tempFile = null;
+        try {
+            conn = NetWorkUtil.openCompat(urlStr);
+            cn.ottohub.oh2013.util.NetWorkUtil.applySSLCompat(conn, urlStr);
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(12000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.connect();
+
+            tempFile = new java.io.File(getActivity().getCacheDir(), "vd_" + urlStr.hashCode() + ".tmp");
+            InputStream is = conn.getInputStream();
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(tempFile);
+            byte[] buf = new byte[8192];
+            int readLen;
+            while ((readLen = is.read(buf)) != -1) {
+                fos.write(buf, 0, readLen);
+            }
+            is.close();
+            fos.close();
+            conn.disconnect();
+            conn = null;
+
+            if (!tempFile.exists() || tempFile.length() == 0) return null;
+
+            // 下载的原图直接作为磁盘缓存（同目录 renameTo 成功），下次直接解码
+            java.io.File decodeTarget = tempFile;
+            if (diskFile != null && tempFile.renameTo(diskFile)) {
+                decodeTarget = diskFile;
+            }
+            return GlobalImageCache.decodeFileSafely(decodeTarget, 200, 150, 1);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+            if (tempFile != null && tempFile.exists()) tempFile.delete();
+        }
+    }
+
+    private void playVideo() {
+        // 防连点
+        if (isPlayButtonClicked) {
+            return;
+        }
+        isPlayButtonClicked = true;
+
+        if (!isAdded() || getActivity() == null) {
+            isPlayButtonClicked = false;
+            return;
+        }
+        if (videoInfo == null) {
+            Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_89c6), Toast.LENGTH_SHORT).show();
+            isPlayButtonClicked = false;
+            return;
+        }
+
+        // 离线模式：直接播放本地缓存文件
+        if (mOfflineMode) {
+            playOfflineVideo();
+            isPlayButtonClicked = false;
+            return;
+        }
+
+        final long targetCid;
+        if (videoInfo.cids != null && currentPartIndex < videoInfo.cids.size()) {
+            targetCid = videoInfo.cids.get(currentPartIndex);
+        } else {
+            targetCid = 0;
+        }
+        if (targetCid == 0) {
+            Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_65e0), Toast.LENGTH_SHORT).show();
+            isPlayButtonClicked = false;
+            return;
+        }
+
+        final long tempAid = videoInfo.aid;
+        final String tempTitle = videoInfo.title;
+        final int tempPartIndex = currentPartIndex;
+        final String tempPartTitle = (videoInfo.pagenames != null && videoInfo.pagenames.size() > 1 && tempPartIndex < videoInfo.pagenames.size())
+                ? videoInfo.pagenames.get(tempPartIndex) : tempTitle;
+
+        final long[] cidArray;
+        final String[] partNameArray;
+        if (videoInfo.cids != null && videoInfo.cids.size() > 1) {
+            cidArray = new long[videoInfo.cids.size()];
+            for (int i = 0; i < cidArray.length; i++) cidArray[i] = videoInfo.cids.get(i);
+            partNameArray = videoInfo.pagenames.toArray(new String[videoInfo.pagenames.size()]);
+        } else {
+            cidArray = null;
+            partNameArray = null;
+        }
+
+        if (SettingsActivity.isOnlinePlayEnabled()) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        final PlayerData playerData = new PlayerData();
+                        playerData.aid = tempAid;
+                        playerData.cid = targetCid;
+                        playerData.title = tempPartTitle;
+                    int quality = getSafeQuality();
+                    playerData.qn = quality;
+                    PlayerApi.getVideo(playerData, false);
+                    reconcileQuality(playerData);
+                    final String videoUrl = playerData.videoUrl;
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                if (videoUrl != null && videoUrl.length() > 0) {
+                                    int pref = cn.ottohub.oh2013.SettingsActivity.getPlayerPreference();
+                                        final int resumeMs = computeResumeMs(playerData, targetCid);
+                                        boolean hasDashAudio = playerData.audioUrl != null
+                                                && playerData.audioUrl.length() > 0;
+                                        // Ostwind 播放器：直接进 Ostwind，不走 PlayerAnimActivity
+                                        // （DASH 音视频分离流 MediaPlayer 解析不了，回退内置播放器）
+                                        if (pref == cn.ottohub.oh2013.SettingsActivity.PLAYER_OSTWIND && !hasDashAudio) {
+                                            Intent wIntent = new Intent(getActivity(),
+                                                    cn.ottohub.oh2013.player.OstwindPlayerActivity.class);
+                                            wIntent.putExtra("video_url", videoUrl);
+                                            String cookie = cn.ottohub.oh2013.util.CookieGenerator.getCookieString(true);
+                                            if (cookie != null && cookie.length() > 0) {
+                                                wIntent.putExtra("cookie", cookie);
+                                            }
+                                            wIntent.putExtra("agent", cn.ottohub.oh2013.util.NetWorkUtil.USER_AGENT_WEB);
+                                            wIntent.putExtra("video_title", tempPartTitle);
+                                            wIntent.putExtra("aid", tempAid);
+                                            wIntent.putExtra("cid", targetCid);
+                                            wIntent.putExtra("resume_position", resumeMs);
+                                            isPlayButtonClicked = false;
+                                            startActivity(wIntent);
+                                            return;
+                                        }
+                                        // 内置播放器（PLAYER_BUILTIN 且 API>=9）才直接进 BiliPlayerActivity；
+                                        // 其余（外部/系统/自动）统一走 PlayerAnimActivity 分派，
+                                        // 由 PlayerAnimActivity 按播放器偏好处理在线播放（含本地代理跳外部）
+                                        // PLAYER_BUILTIN == 8
+                                        boolean useBuiltin = pref == 8
+                                                && cn.ottohub.oh2013.util.SdkHelper.getSdkInt() >= 9;
+                                        if (useBuiltin) {
+                                            Intent intent = new Intent(getActivity(), BiliPlayerActivity.class);
+                                            intent.putExtra("video_url", videoUrl);
+                                            if (hasDashAudio) {
+                                                intent.putExtra("audio_url", playerData.audioUrl);
+                                            }
+                                            if (playerData.durationMs > 0) {
+                                                intent.putExtra("duration_ms", playerData.durationMs);
+                                            }
+                                            intent.putExtra("video_title", tempPartTitle);
+                                            intent.putExtra("aid", tempAid);
+                                            intent.putExtra("cid", targetCid);
+                                            intent.putExtra("online_mode", true);
+                                            intent.putExtra("part_index", tempPartIndex);
+                                            if (videoInfo != null) {
+                                                intent.putExtra("cover_url", videoInfo.cover);
+                                            }
+                                            if (cidArray != null) {
+                                                intent.putExtra("cids", cidArray);
+                                                intent.putExtra("pagenames", partNameArray);
+                                            }
+                                            putQualityExtras(intent, playerData);
+                                            intent.putExtra("resume_position", resumeMs);
+                                            isPlayButtonClicked = false;
+                                            startActivity(intent);
+                                            return;
+                                        }
+                                        Intent pIntent = new Intent(getActivity(), PlayerAnimActivity.class);
+                                        pIntent.putExtra("video_url", videoUrl);
+                                        if (hasDashAudio) {
+                                            pIntent.putExtra("audio_url", playerData.audioUrl);
+                                        }
+                                        if (playerData.durationMs > 0) {
+                                            pIntent.putExtra("duration_ms", playerData.durationMs);
+                                        }
+                                        pIntent.putExtra("video_title", tempPartTitle);
+                                        pIntent.putExtra("aid", tempAid);
+                                        pIntent.putExtra("cid", targetCid);
+                                        pIntent.putExtra("online_mode", true);
+                                        pIntent.putExtra("part_index", tempPartIndex);
+                                        if (videoInfo != null) {
+                                            pIntent.putExtra("cover_url", videoInfo.cover);
+                                        }
+                                        if (cidArray != null) {
+                                            pIntent.putExtra("cids", cidArray);
+                                            pIntent.putExtra("pagenames", partNameArray);
+                                        }
+                                        putQualityExtras(pIntent, playerData);
+                                        pIntent.putExtra("resume_position", resumeMs);
+                                        isPlayButtonClicked = false;
+                                        startActivity(pIntent);
+                                    } else {
+                                        Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_83b7_1), Toast.LENGTH_SHORT).show();
+                                        isPlayButtonClicked = false;
+                                    }
+                                }
+                            });
+                        }
+                    } catch (final Exception e) {
+                        if (getActivity() != null) {
+                            getActivity().runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (!isAdded() || getActivity() == null) return;
+                                    Toast.makeText(getActivity(), "获取播放地址失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                                    isPlayButtonClicked = false;
+                                }
+                            });
+                        }
+                    }
+                }
+            }).start();
+            return;
+        }
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final PlayerData playerData = new PlayerData();
+                    playerData.aid = tempAid;
+                    playerData.cid = targetCid;
+                    playerData.title = tempPartTitle;
+                    int quality = getSafeQuality();
+                    playerData.qn = quality;
+                    PlayerApi.getVideo(playerData, false);
+                    reconcileQuality(playerData);
+                    final String videoUrl = playerData.videoUrl;
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                if (videoUrl != null && videoUrl.length() > 0) {
+                                    if (getActivity() instanceof VideoDetailActivity) {
+                                        ((VideoDetailActivity) getActivity()).setPausingForTransient(true);
+                                    }
+                                    final int resumeMs = computeResumeMs(playerData, targetCid);
+                                    Intent intent = new Intent(getActivity(), PlayerAnimActivity.class);
+                                    intent.putExtra("video_url", videoUrl);
+                                    if (playerData.audioUrl != null && playerData.audioUrl.length() > 0) {
+                                        intent.putExtra("audio_url", playerData.audioUrl);
+                                    }
+                                    if (playerData.durationMs > 0) {
+                                        intent.putExtra("duration_ms", playerData.durationMs);
+                                    }
+                                    intent.putExtra("video_title", tempPartTitle);
+                                    intent.putExtra("aid", tempAid);
+                                    intent.putExtra("cid", targetCid);
+                                    intent.putExtra("part_index", tempPartIndex);
+                                    if (videoInfo != null) {
+                                        intent.putExtra("cover_url", videoInfo.cover);
+                                    }
+                                    if (cidArray != null) {
+                                        intent.putExtra("cids", cidArray);
+                                        intent.putExtra("pagenames", partNameArray);
+                                    }
+                                    putQualityExtras(intent, playerData);
+                                    intent.putExtra("resume_position", resumeMs);
+                                    isPlayButtonClicked = false;
+                                    startActivity(intent);
+                                } else {
+                                    Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_83b7_1), Toast.LENGTH_SHORT).show();
+                                    isPlayButtonClicked = false;
+                                }
+                            }
+                        });
+                    }
+                } catch (final Exception e) {
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAdded() || getActivity() == null) return;
+                                Toast.makeText(getActivity(), "获取播放地址失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                                isPlayButtonClicked = false;
+                            }
+                        });
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private void playOfflineVideo() {
+        int pageIndex = currentPartIndex;
+        if (pageIndex < 0) pageIndex = 0;
+
+        int actualPage = pageIndex + 1;
+        if (videoInfo.pages != null && pageIndex < videoInfo.pages.size()) {
+            actualPage = videoInfo.pages.get(pageIndex);
+        }
+
+        java.io.File downloadDir;
+        if (PermissionUtil.hasWriteStorage(getActivity())) {
+            downloadDir = new java.io.File(
+                    android.os.Environment.getExternalStorageDirectory(), "BiliClassic/Download");
+            if (!downloadDir.isDirectory()) {
+                downloadDir = null;
+            }
+        } else {
+            downloadDir = null;
+        }
+        if (downloadDir == null) {
+            downloadDir = new java.io.File(getActivity().getFilesDir(), "Download");
+        }
+
+        cn.ottohub.oh2013.download.VideoDownloadEnvironment env =
+                new cn.ottohub.oh2013.download.VideoDownloadEnvironment(downloadDir,
+                        aid, actualPage);
+        java.io.File videoFile = env.getVideoFile();
+        java.io.File danmakuFile = env.getDanmakuFile(false);
+
+        if (!videoFile.exists()) {
+            Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_7f13), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        int qualityQn = 0;
+        String qualityName = null;
+        try {
+            java.io.File entryFile = env.getEntryFile(false);
+            if (entryFile != null && entryFile.exists()) {
+                cn.ottohub.oh2013.download.VideoDownloadEntry entry =
+                        cn.ottohub.oh2013.download.VideoDownloadEntry.loadFromFile(entryFile);
+                if (entry != null) {
+                    qualityQn = entry.quality;
+                    qualityName = entry.qualityName;
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.e("VideoDetail", "读取entry.json失败: " + e.getMessage());
+        }
+
+        String pageTitle = (videoInfo.pagenames != null && videoInfo.pagenames.size() > 1 && pageIndex < videoInfo.pagenames.size())
+                ? videoInfo.pagenames.get(pageIndex) : videoInfo.title;
+
+        Intent intent = new Intent(getActivity(), BiliPlayerActivity.class);
+        intent.putExtra("video_title", pageTitle);
+        intent.putExtra("cache_path", videoFile.getAbsolutePath());
+        if (videoInfo.cids != null && pageIndex < videoInfo.cids.size()) {
+            intent.putExtra("cid", videoInfo.cids.get(pageIndex));
+        }
+        if (danmakuFile.exists()) {
+            intent.putExtra("danmaku_cache_path", danmakuFile.getAbsolutePath());
+        }
+        intent.putExtra("offline_mode", true);
+        if (videoInfo != null) {
+            intent.putExtra("cover_url", videoInfo.cover);
+        }
+        intent.putExtra("current_qn", qualityQn);
+        if (qualityName != null && qualityName.length() > 0) {
+            intent.putExtra("qn_str_array", new String[]{qualityName});
+        } else if (qualityQn > 0) {
+            String shortName = cn.ottohub.oh2013.download.VideoDownloadEnvironment.getQualityName(qualityQn);
+            intent.putExtra("qn_str_array", new String[]{shortName});
+        }
+        isPlayButtonClicked = false;
+
+        // 非隐私模式：离线播放前上传播放记录（00：00）
+        long reportCid = (videoInfo.cids != null && pageIndex < videoInfo.cids.size())
+                ? videoInfo.cids.get(pageIndex) : 0;
+        if (reportCid > 0) {
+            cn.ottohub.oh2013.player.BiliPlayerActivity.reportHistoryStatic(
+                    getActivity(), aid, reportCid, 0);
+        }
+
+        // 检查播放器偏好：非内置/自动 → 用外部播放器
+        int pref = SettingsActivity.getPlayerPreference();
+        if (pref != 8) {
+            android.net.Uri uri = SdkHelper.getSdkInt() >= 24
+                    ? FileProviderCompat.getUriForFile(getActivity(), videoFile)
+                    : android.net.Uri.fromFile(videoFile);
+            Intent extIntent = new Intent(Intent.ACTION_VIEW);
+            extIntent.setDataAndType(uri, "video/mp4");
+            if (SdkHelper.getSdkInt() >= 24) {
+                extIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            }
+            String pkg = SettingsActivity.getPlayerPackageName();
+            if (pkg != null) {
+                try { Intent.class.getMethod("setPackage", String.class).invoke(extIntent, pkg); } catch (Exception ignored) {}
+                // 直接尝试启动；queryIntentActivities 对 FileProvider content URI 会因权限过滤误判 0，
+                // 导致装了播放器也被降级。改为 try-catch。
+            }
+            try {
+                if (getActivity() instanceof VideoDetailActivity) {
+                    ((VideoDetailActivity) getActivity()).setPausingForTransient(true);
+                }
+                startActivity(extIntent);
+                return;
+            } catch (Exception e) {
+                Toast.makeText(getActivity(), getActivity().getString(R.string.videodetailfragment_toast_672a), Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+
+        startActivity(intent);
+    }
+
+    /**
+     * 断点续播：只有当 B 站返回的上次播放分P(last_play_cid)与当前分P一致时才恢复进度。
+     * B 站 playurl 接口的 last_play_time 单位已是「毫秒」，
+     * 这里直接作为毫秒进度返回，不再做任何换算。
+     */
+    private int computeResumeMs(PlayerData playerData, long targetCid) {
+        try {
+            if (playerData == null || targetCid == 0) return 0;
+            if (playerData.cidHistory != targetCid) return 0;
+            int ms = playerData.progress;
+            if (ms <= 0) return 0;
+            return ms;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void putQualityExtras(Intent intent, PlayerData playerData) {
+        if (playerData == null) return;
+
+        if (playerData.qnStrList != null && playerData.qnStrList.length > 0) {
+            String[] fixedNames = new String[playerData.qnStrList.length];
+            for (int i = 0; i < playerData.qnStrList.length; i++) {
+                String name = playerData.qnStrList[i];
+                if (name != null) {
+                    if (name.contains("1080P") && name.contains("高清")) {
+                        name = name.replace("高清", "超清");
+                    }
+                    if (name.contains("720") && name.contains("准高清")) {
+                        name = name.replace("准高清", "高清");
+                    }
+                }
+                fixedNames[i] = name;
+            }
+            intent.putExtra("qn_str_array", fixedNames);
+        }
+        if (playerData.qnValueList != null && playerData.qnValueList.length > 0) {
+            intent.putExtra("qn_value_array", playerData.qnValueList);
+        }
+        intent.putExtra("current_qn", playerData.qn);
+    }
+
+    private void reconcileQuality(PlayerData playerData) {
+        if (playerData.qnValueList != null && playerData.qnValueList.length > 0) {
+            int bestQn = playerData.qnValueList[0];
+            boolean found = false;
+            for (int q : playerData.qnValueList) {
+                if (q == playerData.qn) { bestQn = q; found = true; break; }
+                if (q < playerData.qn && (bestQn > playerData.qn || q > bestQn)) bestQn = q;
+            }
+            if (!found) {
+                playerData.qn = bestQn;
+                playerData.timeStamp = 0;
+                try {
+                    PlayerApi.getVideo(playerData, false);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}

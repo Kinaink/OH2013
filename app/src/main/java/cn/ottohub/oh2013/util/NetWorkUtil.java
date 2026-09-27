@@ -1,0 +1,1212 @@
+/*
+ * 本软件基于以下项目修改，致谢前辈：
+ *   - 哔哩终端 (BiliTerminal) by RobinNotBad
+ *   - 腕上哔哩 (WristBilibili) by luern0313
+ *
+ * 本程序是自由软件，遵循 GNU 通用公共许可证第 3 版（或更高版本）发布。
+ * 你可以重新分发或修改它，希望它能为你带来快乐。
+ *
+ * 详情请参阅 GNU 通用公共许可证：
+ * <https://www.gnu.org/licenses/>
+ *
+ * 修改者：一只毛子球 (BiliClassic)
+ * 修改时间：2026年6月19日
+ *
+ * 安卓2也要看B站！
+ */
+package cn.ottohub.oh2013.util;
+
+import android.util.Log;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.X509TrustManager;
+
+public class NetWorkUtil {
+
+    public static final String USER_AGENT_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.95 Safari/537.36";
+
+    // 默认请求头，用于各API调用
+    public static ArrayList webHeaders = new ArrayList();
+
+    private static final int CONNECT_TIMEOUT = 15000;
+    private static final int READ_TIMEOUT = 15000;
+    private static final int MAX_REDIRECT_COUNT = 5;
+    // 请求自动重试：网络异常/超时/空响应时重试次数（不含首次）
+    private static final int MAX_RETRY_COUNT = 2;
+
+    // 根据当前语言设置返回 Accept-Language 值
+    private static String getAcceptLanguage() {
+        String locale = LocaleHelper.getCurrentLocale();
+        if ("zh_TW".equals(locale)) {
+            return "zh-TW,zh;q=0.9,en;q=0.8";
+        }
+        return "zh-CN,zh;q=0.9,en;q=0.8";
+    }
+
+    // 线程安全的 Cookie 存储
+    private static String sCookieString = "";
+
+    // 强制携带登录 Cookie 标志（用于 无痕模式 下仍需登录才能使用的功能，如播放历史）
+    private static boolean sForceLogin = false;
+
+    // OTTOhub 等第三方 API 不应附带 B 站 Cookie，否则可能收到 HTML 错误页
+    private static final ThreadLocal<Boolean> SKIP_AUTO_COOKIE = new ThreadLocal<Boolean>();
+
+    public static void setForceLogin(boolean force) {
+        sForceLogin = force;
+    }
+
+    public static void setSkipAutoCookie(boolean skip) {
+        if (skip) {
+            SKIP_AUTO_COOKIE.set(Boolean.TRUE);
+        } else {
+            SKIP_AUTO_COOKIE.remove();
+        }
+    }
+
+    public static JSONObject parseJsonString(String response, String url) throws JSONException {
+        if (response == null || response.length() == 0) {
+            throw new JSONException("在访问 " + url + " 时返回数据为空");
+        }
+        String trimmed = response.trim();
+        if (trimmed.length() > 0 && trimmed.charAt(0) == '\uFEFF') {
+            trimmed = trimmed.substring(1).trim();
+        }
+        // 去掉可能的 UTF-8 BOM 字节残留
+        while (trimmed.length() > 0 && trimmed.charAt(0) < 32 && trimmed.charAt(0) != '\n' && trimmed.charAt(0) != '\r') {
+            if (trimmed.charAt(0) == '\uFEFF') {
+                trimmed = trimmed.substring(1).trim();
+                continue;
+            }
+            break;
+        }
+        if (trimmed.startsWith("<")
+                || trimmed.regionMatches(true, 0, "<!doctype", 0, 9)
+                || trimmed.regionMatches(true, 0, "<html", 0, 5)
+                || trimmed.regionMatches(true, 0, "<br", 0, 3)) {
+            // 网关越界时常回 HTML；错误码勿含面向用户的中文（UI 会误 Toast）
+            throw new JSONException("RESPONSE_NOT_JSON");
+        }
+        if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+            throw new JSONException("RESPONSE_NOT_JSON");
+        }
+        try {
+            return new JSONObject(trimmed);
+        } catch (JSONException e) {
+            String em = e.getMessage() != null ? e.getMessage() : "";
+            // org.json: "Value <br of type java.lang.String cannot be converted to JSONObject"
+            if (em.indexOf('<') >= 0 || em.toLowerCase().indexOf("html") >= 0
+                    || em.indexOf("br") >= 0) {
+                throw new JSONException("RESPONSE_NOT_JSON");
+            }
+            throw new JSONException("JSON 解析失败: " + em);
+        }
+    }
+
+    public static synchronized String getCookieString() {
+        return sCookieString;
+    }
+
+    public static synchronized void setCookieString(String cookie) {
+        if (cookie == null) cookie = "";
+        sCookieString = mergeCookies(sCookieString, cookie);
+    }
+
+    public static synchronized void ensureBrowserCookies() {
+        Map cookieMap = parseCookieMap(SharedPreferencesUtil.getString("cookies", ""));
+
+        // b_nut
+        if (!cookieMap.containsKey("b_nut")) {
+            cookieMap.put("b_nut", String.valueOf(System.currentTimeMillis() / 1000));
+        }
+
+        // b_lsid: 8位大写hex + "_" + 当前时间hex
+        if (!cookieMap.containsKey("b_lsid")) {
+            java.util.Random rnd = new java.util.Random();
+            String hex = "0123456789ABCDEF";
+            StringBuffer sb = new StringBuffer();
+            for (int i = 0; i < 8; i++) sb.append(hex.charAt(rnd.nextInt(16)));
+            sb.append("_");
+            sb.append(Long.toHexString(System.currentTimeMillis()).toUpperCase());
+            cookieMap.put("b_lsid", sb.toString());
+        }
+
+        // _uuid: 8-4-4-4-12 + 5位time%100000 + infoc
+        if (!cookieMap.containsKey("_uuid")) {
+            java.util.Random rnd = new java.util.Random();
+            String hex = "0123456789ABCDEF";
+            StringBuffer sb = new StringBuffer();
+            int[] groups = {8, 4, 4, 4, 12};
+            for (int g = 0; g < groups.length; g++) {
+                for (int i = 0; i < groups[g]; i++) sb.append(hex.charAt(rnd.nextInt(16)));
+                if (g < groups.length - 1) sb.append("-");
+            }
+            sb.append(String.format("%05d", System.currentTimeMillis() % 100000));
+            sb.append("infoc");
+            cookieMap.put("_uuid", sb.toString());
+        }
+
+        // LIVE_BUVID
+        if (!cookieMap.containsKey("LIVE_BUVID")) {
+            long min = 1000000000000000L;
+            long max = 9999999999999999L;
+            cookieMap.put("LIVE_BUVID", "AUTO" + (min + (long)(new java.util.Random().nextDouble() * (max - min))));
+        }
+
+        // browser_resolution (默认1280x720)
+        if (!cookieMap.containsKey("browser_resolution")) {
+            cookieMap.put("browser_resolution", "1280-720");
+        }
+
+        // buvid_fp (随机32位hex)
+        if (!cookieMap.containsKey("buvid_fp")) {
+            java.util.Random rnd = new java.util.Random();
+            String hex = "0123456789abcdef";
+            StringBuffer sb = new StringBuffer();
+            for (int i = 0; i < 32; i++) sb.append(hex.charAt(rnd.nextInt(16)));
+            cookieMap.put("buvid_fp", sb.toString());
+        }
+
+        // 其他静态cookie
+        if (!cookieMap.containsKey("enable_web_push")) cookieMap.put("enable_web_push", "DISABLE");
+        if (!cookieMap.containsKey("home_feed_column")) cookieMap.put("home_feed_column", "4");
+        if (!cookieMap.containsKey("PVID")) cookieMap.put("PVID", "1");
+
+        String newCookie = mapToCookieString(cookieMap);
+        SharedPreferencesUtil.putString("cookies", newCookie);
+        setCookieString(newCookie);
+    }
+
+    public static synchronized void refreshHeaders() {
+        ensureBrowserCookies();
+        String cookie = cleanCookieString(SharedPreferencesUtil.getString("cookies", ""));
+        if (cookie == null) cookie = "";
+        SharedPreferencesUtil.putString("cookies", cookie);
+        sCookieString = mergeCookies(sCookieString, cookie);
+    }
+
+    // Cookie 工具方法
+
+    /**
+     * 合并 Cookie：按名称去重，后面的覆盖前面的
+     */
+    private static String mergeCookies(String existing, String newCookie) {
+        if (newCookie == null || newCookie.length() == 0) {
+            return existing == null ? "" : existing;
+        }
+        if (existing == null || existing.length() == 0) {
+            return newCookie;
+        }
+
+        Map cookieMap = parseCookieMap(existing);
+        Map newMap = parseCookieMap(newCookie);
+
+        for (Iterator it = newMap.keySet().iterator(); it.hasNext(); ) {
+            String key = (String) it.next();
+            cookieMap.put(key, newMap.get(key));
+        }
+
+        return mapToCookieString(cookieMap);
+    }
+
+    /**
+     * 解析 Cookie 字符串为 Map
+     */
+    private static Map parseCookieMap(String cookie) {
+        Map map = new HashMap();
+        if (cookie == null || cookie.length() == 0) {
+            return map;
+        }
+        String[] pairs = cookie.split("; ");
+        for (int i = 0; i < pairs.length; i++) {
+            String pair = pairs[i];
+            int eq = pair.indexOf("=");
+            if (eq > 0) {
+                String key = pair.substring(0, eq);
+                String value = pair.substring(eq + 1);
+                map.put(key, value);
+            }
+        }
+        return map;
+    }
+
+    /**
+     * Map 转 Cookie 字符串
+     */
+    private static String mapToCookieString(Map map) {
+        StringBuffer sb = new StringBuffer();
+        for (Iterator it = map.keySet().iterator(); it.hasNext(); ) {
+            String key = (String) it.next();
+            String value = (String) map.get(key);
+            if (sb.length() > 0) {
+                sb.append("; ");
+            }
+            sb.append(key).append("=").append(value);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从 Cookie 字符串中获取指定名称的值（自动 URL 解码）
+     * 修复：使用正则提取，避免 JSON 污染
+     */
+    public static synchronized String getInfoFromCookie(String name, String cookie) {
+        if (cookie == null || cookie.length() == 0) {
+            return "";
+        }
+
+        // 直接用正则提取，避免 parseCookieMap 解析 JSON 污染
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(name + "=([^;\\s]+)");
+        java.util.regex.Matcher m = p.matcher(cookie);
+        if (m.find()) {
+            String value = m.group(1);
+            // 如果提取的值包含引号或逗号，说明被污染了，尝试用 URL 解码
+            if (value != null && value.length() > 0) {
+                try {
+                    return URLDecoder.decode(value, "UTF-8");
+                } catch (UnsupportedEncodingException e) {
+                    return value;
+                }
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 从 Cookie 提取 bili_jct（专门方法，用正则）
+     */
+    public static synchronized String getCsrfFromCookie(String cookie) {
+        if (cookie == null || cookie.length() == 0) {
+            return null;
+        }
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("bili_jct=([a-f0-9]+)");
+        java.util.regex.Matcher m = p.matcher(cookie);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return null;
+    }
+
+    /**
+     * 获取当前 csrf（bili_jct），供点赞/评论/关注/投币等 POST 使用。
+     * 优先已保存的 csrf key；为空时再从当前 Cookie 取 bili_jct，
+     * 兼容扫码登录凭证来自跨域 Set-Cookie（URL 里只有 ticket）的情况。
+     */
+    public static synchronized String getCsrf() {
+        String csrf = SharedPreferencesUtil.getString("csrf", "");
+        if (csrf != null && csrf.length() > 0) {
+            return csrf;
+        }
+        String cookie = getCookieString();
+        if (cookie == null || cookie.length() == 0) {
+            cookie = SharedPreferencesUtil.getString("cookies", "");
+        }
+        String fromCookie = getInfoFromCookie("bili_jct", cookie);
+        return fromCookie != null ? fromCookie : "";
+    }
+
+    // SSL 相关
+
+    private static final X509TrustManager TRUST_ALL_CERTS = new X509TrustManager() {
+        public void checkClientTrusted(X509Certificate[] chain, String authType) {}
+        public void checkServerTrusted(X509Certificate[] chain, String authType) {}
+        public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+    };
+
+    public static final HostnameVerifier TRUST_ALL_HOSTNAMES = new HostnameVerifier() {
+        public boolean verify(String hostname, SSLSession session) { return true; }
+    };
+
+    public static SSLSocketFactory getTrustAllSSLSocketFactory() {
+        // 使用 SSLSocketFactoryCompat 显式启用现代 TLS 协议与加密套件：
+        // Android 2.x-4.x 系统默认不会自动协商 TLS 1.2/现代套件，导致握手慢或失败，
+        // 而 "部分设备能用、部分设备网络极慢" 正是这个原因。
+        try {
+            return new SSLSocketFactoryCompat(TRUST_ALL_CERTS);
+        } catch (Exception e) {
+            Log.e("NetWorkUtil", "创建 SSLSocketFactoryCompat 失败，回退默认: " + e.getMessage());
+            try {
+                SSLContext sc = SSLContext.getInstance("TLS");
+                sc.init(null, new X509TrustManager[]{TRUST_ALL_CERTS}, new java.security.SecureRandom());
+                return sc.getSocketFactory();
+            } catch (Exception e2) {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * 为任意 HttpURLConnection 应用兼容 TLS 设置（用于各处直接 openConnection 的 HTTPS 请求）。
+     * 若连接不是 HTTPS 则不做任何事。
+     */
+    public static void applySSLCompat(HttpURLConnection conn, String url) {
+        if (conn == null || url == null || !url.startsWith("https")) return;
+        if (!(conn instanceof HttpsURLConnection)) return;
+        try {
+            SSLSocketFactory sslFactory = getTrustAllSSLSocketFactory();
+            if (sslFactory != null) {
+                ((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
+            }
+            ((HttpsURLConnection) conn).setHostnameVerifier(TRUST_ALL_HOSTNAMES);
+        } catch (Exception e) {
+        }
+    }
+
+    /** 打开连接并自动套上旧系统 HTTPS/TLS 兼容；各处请优先用此方法。 */
+    public static HttpURLConnection openCompat(String urlStr) throws IOException {
+        if (urlStr == null) throw new IOException("url null");
+        URL url = new URL(urlStr);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        applySSLCompat(conn, urlStr);
+        return conn;
+    }
+
+    // JSON 请求
+
+    public static JSONObject getJson(String url) throws IOException, JSONException {
+        String response = get(url);
+        try {
+            return parseJsonString(response, url);
+        } catch (OutOfMemoryError e) {
+            throw new IOException("响应数据过大，内存不足");
+        }
+    }
+
+    public static JSONObject getJson(String url, ArrayList headers) throws IOException, JSONException {
+        // API < 10 无 JSONTokener(Reader) 构造器，getJsonStream 会走反射失败→重连路径。
+        // Android 1.6 上重连会 Read timed out（0.4.9 单次请求正常，0.4.10 起双请求超时），
+        // 因此低版本直接走单次 get()，与 0.4.9 行为一致。
+        if (SdkHelper.getSdkInt() < 10) {
+            String response = get(url, headers);
+            return parseJsonString(response, url);
+        }
+        return getJsonStream(url, headers);
+    }
+
+    // GET 请求
+
+    public static String get(String url) throws IOException {
+        return get(url, null);
+    }
+
+    public static String get(String url, ArrayList headers) throws IOException {
+        return getInternal(url, headers, 0);
+    }
+
+    private static String getInternal(String url, ArrayList headers, int retryCount) throws IOException {
+        IOException lastException = null;
+        for (int attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
+            if (attempt > 0) {
+                sleepBeforeRetry(attempt);
+            }
+            try {
+                String result = doGetOnce(url, headers, retryCount);
+                if (result == null || result.length() == 0) {
+                    // 空响应：非最终次则重试（可能是代理/连接池残留问题）
+                    if (attempt < MAX_RETRY_COUNT) {
+                        Log.w("NetDiag", "GET 空响应 " + hostOf(url) + " 将重试 (attempt=" + attempt + ")");
+                        continue;
+                    }
+                }
+                return result;
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt < MAX_RETRY_COUNT && isRetryable(e)) {
+                    Log.w("NetDiag", "GET 重试 " + hostOf(url) + " " + e.getClass().getSimpleName() + " (attempt=" + attempt + ")");
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastException != null ? lastException : new IOException("请求失败");
+    }
+
+    private static String doGetOnce(String url, ArrayList headers, int retryCount) throws IOException {
+        HttpURLConnection conn = null;
+        BufferedReader reader = null;
+        java.io.CharArrayWriter caw = null;
+        try {
+            Log.d("NetDiag", "GET 开始 " + hostOf(url) + " (retry=" + retryCount + ")");
+            long t0 = System.currentTimeMillis();
+            conn = createConnection(url, "GET", headers);
+            conn.connect();
+            Log.d("NetDiag", "GET connect 完成 " + hostOf(url) + " 耗时=" + (System.currentTimeMillis() - t0) + "ms");
+
+            int responseCode = conn.getResponseCode();
+            Log.d("NetDiag", "GET 响应码=" + responseCode + " " + hostOf(url) + " 总耗时=" + (System.currentTimeMillis() - t0) + "ms");
+
+            if (responseCode == 301 || responseCode == 302 || responseCode == 307) {
+                return handleRedirect(conn, url, headers, "GET", null, retryCount + 1);
+            }
+
+            return readResponse(conn, responseCode);
+
+        } catch (IOException e) {
+            Log.e("NetDiag", "GET 异常 " + hostOf(url) + " " + e.getClass().getName() + ": " + e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            Log.e("NetDiag", "GET 异常(非IO) " + hostOf(url) + " " + e.getClass().getName() + ": " + e.getMessage());
+            throw new IOException("请求异常: " + e.toString());
+        } finally {
+            closeQuietly(reader);
+            closeQuietly(caw);
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    // POST 请求
+
+    public static String post(String url, String data, List headers) throws IOException {
+        return post(url, data, headers, "application/x-www-form-urlencoded");
+    }
+
+    public static String postJson(String url, String data, List headers) throws IOException {
+        return post(url, data, headers, "application/json");
+    }
+
+    public static String deleteJson(String url, String data, List headers) throws IOException {
+        return deleteInternal(url, data, headers, "application/json");
+    }
+
+    private static String deleteInternal(String url, String data, List headers, String contentType) throws IOException {
+        IOException lastException = null;
+        for (int attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
+            if (attempt > 0) {
+                sleepBeforeRetry(attempt);
+            }
+            try {
+                HttpURLConnection conn = null;
+                try {
+                    conn = createConnection(url, "DELETE", headers);
+                    conn.setRequestProperty("Content-Type", contentType + "; charset=utf-8");
+                    if (data != null && data.length() > 0) {
+                        OutputStream os = conn.getOutputStream();
+                        os.write(data.getBytes("UTF-8"));
+                        os.flush();
+                        os.close();
+                    }
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode == 301 || responseCode == 302 || responseCode == 307) {
+                        return handleRedirect(conn, url, headers, "DELETE", data, 1);
+                    }
+                    return readResponse(conn, responseCode);
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt < MAX_RETRY_COUNT && isRetryable(e)) {
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastException != null ? lastException : new IOException("请求失败");
+    }
+
+    public static String post(String url, String data) throws IOException {
+        return post(url, data, null);
+    }
+
+    public static String post(String url, String data, List headers, String contentType) throws IOException {
+        return postInternal(url, data, headers, contentType, 0);
+    }
+
+    private static String postInternal(String url, String data, List headers, String contentType, int retryCount) throws IOException {
+        IOException lastException = null;
+        for (int attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
+            if (attempt > 0) {
+                sleepBeforeRetry(attempt);
+            }
+            try {
+                String result = doPostOnce(url, data, headers, contentType, retryCount);
+                if (result == null || result.length() == 0) {
+                    if (attempt < MAX_RETRY_COUNT) {
+                        Log.w("NetDiag", "POST 空响应 " + hostOf(url) + " 将重试 (attempt=" + attempt + ")");
+                        continue;
+                    }
+                }
+                return result;
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt < MAX_RETRY_COUNT && isRetryable(e)) {
+                    Log.w("NetDiag", "POST 重试 " + hostOf(url) + " " + e.getClass().getSimpleName() + " (attempt=" + attempt + ")");
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastException != null ? lastException : new IOException("请求失败");
+    }
+
+    private static String doPostOnce(String url, String data, List headers, String contentType, int retryCount) throws IOException {
+        HttpURLConnection conn = null;
+        BufferedReader reader = null;
+        java.io.CharArrayWriter caw = null;
+        try {
+            Log.d("NetDiag", "POST 开始 " + hostOf(url) + " (retry=" + retryCount + ")");
+            long t0 = System.currentTimeMillis();
+            conn = createConnection(url, "POST", headers);
+            conn.setRequestProperty("Content-Type", contentType + "; charset=utf-8");
+
+            OutputStream os = conn.getOutputStream();
+            os.write(data.getBytes("UTF-8"));
+            os.flush();
+            os.close();
+            Log.d("NetDiag", "POST 写入完成 " + hostOf(url) + " 耗时=" + (System.currentTimeMillis() - t0) + "ms");
+
+            int responseCode = conn.getResponseCode();
+            Log.d("NetDiag", "POST 响应码=" + responseCode + " " + hostOf(url) + " 总耗时=" + (System.currentTimeMillis() - t0) + "ms");
+
+            if (responseCode == 301 || responseCode == 302 || responseCode == 307) {
+                return handleRedirect(conn, url, headers, "POST", data, retryCount + 1);
+            }
+
+            return readResponse(conn, responseCode);
+
+        } catch (IOException e) {
+            Log.e("NetDiag", "POST 异常 " + hostOf(url) + " " + e.getClass().getName() + ": " + e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            Log.e("NetDiag", "POST 异常(非IO) " + hostOf(url) + " " + e.getClass().getName() + ": " + e.getMessage());
+            throw new IOException("请求异常: " + e.toString());
+        } finally {
+            closeQuietly(reader);
+            closeQuietly(caw);
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    // 核心方法
+
+    private static HttpURLConnection createConnection(String url, String method, List headers) throws IOException {
+        URL requestUrl = new URL(url);
+        HttpURLConnection conn = (HttpURLConnection) requestUrl.openConnection();
+
+        if (url.startsWith("https") && conn instanceof HttpsURLConnection) {
+            SSLSocketFactory sslFactory = getTrustAllSSLSocketFactory();
+            if (sslFactory != null) {
+                ((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
+                ((HttpsURLConnection) conn).setHostnameVerifier(TRUST_ALL_HOSTNAMES);
+                Log.d("NetDiag", "已应用兼容SSL工厂: " + sslFactory.getClass().getName() + " for " + hostOf(url));
+            } else {
+                Log.e("NetDiag", "SSL工厂为null, 将使用系统默认 for " + hostOf(url));
+            }
+        }
+
+        conn.setRequestMethod(method);
+        conn.setConnectTimeout(CONNECT_TIMEOUT);
+        conn.setReadTimeout(READ_TIMEOUT);
+        conn.setUseCaches(false);
+        conn.setDoInput(true);
+        conn.setDoOutput("POST".equals(method) || "PUT".equals(method));
+        conn.setInstanceFollowRedirects(false);
+
+        conn.setRequestProperty("Connection",
+                SdkHelper.preferConnectionClose() ? "close" : "keep-alive");
+
+        conn.setRequestProperty("User-Agent", USER_AGENT_WEB);
+        conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+        // 强制明文响应，避免旧 Android 收到 gzip 后当 UTF-8 解出乱码 → JSON 解析失败
+        conn.setRequestProperty("Accept-Encoding", "identity");
+        conn.setRequestProperty("Referer", "https://www.ottohub.cn/");
+        conn.setRequestProperty("Origin", "https://www.ottohub.cn");
+
+        // 应用传入的 headers
+        boolean hasCookieInHeaders = false;
+        if (headers != null) {
+            Map headerMap = listToMap(headers);
+            for (Iterator it = headerMap.keySet().iterator(); it.hasNext(); ) {
+                String key = (String) it.next();
+                String value = (String) headerMap.get(key);
+                if (key != null && value != null) {
+                    conn.setRequestProperty(key, value);
+                    if ("Cookie".equalsIgnoreCase(key)) {
+                        hasCookieInHeaders = true;
+                    }
+                }
+            }
+        }
+
+        // Cookie 处理 - 如果调用方没有自带 Cookie，再自动合并
+        if (!hasCookieInHeaders && !Boolean.TRUE.equals(SKIP_AUTO_COOKIE.get())) {
+            CookieGenerator.ensureCookies();
+            boolean incognitoMode = SharedPreferencesUtil.getBoolean(SharedPreferencesUtil.INCOGNITO_MODE, false);
+            boolean forceLogin = sForceLogin;
+            sForceLogin = false;
+            if (forceLogin) {
+                incognitoMode = false;
+            }
+            String cookie = CookieGenerator.getCookieString(!incognitoMode);
+            if (!incognitoMode) {
+                String loggedCookie = getCookieString();
+                if (loggedCookie == null || loggedCookie.length() == 0) {
+                    loggedCookie = SharedPreferencesUtil.getString("cookies", "");
+                    if (loggedCookie != null && loggedCookie.length() > 0) {
+                        setCookieString(loggedCookie);
+                    }
+                }
+                if (loggedCookie != null && loggedCookie.length() > 0) {
+                    cookie = mergeCookies(cookie, loggedCookie);
+                }
+            }
+            if (cookie != null && cookie.length() > 0) {
+                conn.setRequestProperty("Cookie", cookie);
+            }
+        }
+
+        return conn;
+    }
+
+    /**
+     * ArrayList 转 Map（解决 ArrayList 当 Map 用的问题）
+     */
+    private static Map listToMap(List list) {
+        Map map = new HashMap();
+        if (list == null) {
+            return map;
+        }
+        for (int i = 0; i < list.size() - 1; i += 2) {
+            Object key = list.get(i);
+            Object value = list.get(i + 1);
+            if (key != null && value != null) {
+                map.put(key, value);
+            }
+        }
+        return map;
+    }
+
+    private static String hostOf(String url) {
+        try {
+            java.net.URI uri = new java.net.URI(url);
+            return uri.getHost();
+        } catch (Exception e) {
+            try {
+                int start = url.indexOf("://") + 3;
+                int end = url.indexOf('/', start);
+                if (end < 0) end = url.length();
+                return url.substring(start, end);
+            } catch (Exception e2) {
+                return url;
+            }
+        }
+    }
+
+    /**
+     * 处理重定向，支持最大重试次数限制，防止无限递归
+     */
+    private static String handleRedirect(HttpURLConnection conn, String originalUrl, List headers, String method, String postData, int retryCount) throws IOException {
+        // 检查重试次数是否超过上限
+        if (retryCount > MAX_REDIRECT_COUNT) {
+            throw new IOException("重定向次数超过上限 (" + MAX_REDIRECT_COUNT + " 次)，可能陷入循环重定向。URL: " + originalUrl);
+        }
+
+        String location = conn.getHeaderField("Location");
+        String setCookie = collectSetCookies(conn);
+        if (setCookie != null && setCookie.length() > 0) {
+            saveCookieFromHeader(setCookie);
+        }
+
+        conn.disconnect();
+
+        if (location == null || location.length() == 0) {
+            throw new IOException("重定向响应缺少 Location 头");
+        }
+
+        // 处理相对路径
+        if (!location.startsWith("http")) {
+            int slashIndex = originalUrl.indexOf("/", 8);
+            if (slashIndex > 0) {
+                location = originalUrl.substring(0, slashIndex) + "/" + location;
+            } else {
+                location = originalUrl + "/" + location;
+            }
+        }
+
+        Log.d("NetWorkUtil", "重定向到: " + location + " (第 " + retryCount + " 次)");
+
+        if ("POST".equals(method) && postData != null) {
+            return postInternal(location, postData, headers, "application/x-www-form-urlencoded", retryCount + 1);
+        } else {
+            return getInternal(location, (ArrayList) headers, retryCount + 1);
+        }
+    }
+
+    private static String readResponse(HttpURLConnection conn, int responseCode) throws IOException {
+        InputStream is;
+        if (responseCode >= 400) {
+            is = conn.getErrorStream();
+            Log.e("NetWorkUtil", "HTTP错误: " + responseCode);
+        } else {
+            is = conn.getInputStream();
+        }
+
+        if (is == null) {
+            return "";
+        }
+
+        String encoding = conn.getContentEncoding();
+        if (encoding != null && encoding.toLowerCase().indexOf("gzip") >= 0) {
+            try {
+                is = new java.util.zip.GZIPInputStream(is);
+            } catch (Exception e) {
+                Log.w("NetWorkUtil", "gzip 解压失败: " + e.getMessage());
+            }
+        }
+
+        // 定长块列表，避免 ByteArrayOutputStream 翻倍分配的堆碎片 OOM
+        java.util.ArrayList chunks = new java.util.ArrayList();
+        byte[] buffer = new byte[4096];
+        int total = 0;
+        int maxBytes = 3 * 1024 * 1024;
+        int len;
+        try {
+            while ((len = is.read(buffer, 0, buffer.length)) != -1) {
+                total += len;
+                if (total > maxBytes) {
+                    throw new java.io.IOException("响应数据过大 (" + total + " 字节)");
+                }
+                byte[] chunk = new byte[len];
+                System.arraycopy(buffer, 0, chunk, 0, len);
+                chunks.add(chunk);
+            }
+        } finally {
+            is.close();
+        }
+
+        String result;
+        try {
+            byte[] allBytes = new byte[total];
+            int offset = 0;
+            for (int i = 0; i < chunks.size(); i++) {
+                byte[] chunk = (byte[]) chunks.get(i);
+                System.arraycopy(chunk, 0, allBytes, offset, chunk.length);
+                offset += chunk.length;
+            }
+            chunks.clear();
+            // 部分代理仍可能返回 gzip 魔数（1F 8B），再兜底解压一次
+            if (allBytes.length >= 2 && (allBytes[0] & 0xFF) == 0x1F && (allBytes[1] & 0xFF) == 0x8B) {
+                try {
+                    java.util.zip.GZIPInputStream gis =
+                            new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(allBytes));
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] buf2 = new byte[4096];
+                    int n;
+                    while ((n = gis.read(buf2)) != -1) {
+                        bos.write(buf2, 0, n);
+                    }
+                    gis.close();
+                    allBytes = bos.toByteArray();
+                } catch (Exception e) {
+                    Log.w("NetWorkUtil", "gzip 魔数兜底失败: " + e.getMessage());
+                }
+            }
+            result = new String(allBytes, "UTF-8");
+        } catch (OutOfMemoryError e) {
+            chunks.clear();
+            throw new java.io.IOException("响应数据过大，内存不足");
+        }
+
+        // 收集所有 Set-Cookie（登录响应可能有多个）
+        String setCookie = collectSetCookies(conn);
+        if (setCookie != null && setCookie.length() > 0) {
+            saveCookieFromHeader(setCookie);
+        }
+
+        return result;
+    }
+
+    // 重试前退避等待（简单递增，避免瞬时抖动连续失败）
+    private static void sleepBeforeRetry(int attempt) {
+        try {
+            Thread.sleep(300L * attempt);
+        } catch (InterruptedException e) {
+        }
+    }
+
+    // 可重试的异常：网络层/超时/服务器 5xx 等瞬时问题
+    private static boolean isRetryable(IOException e) {
+        if (e == null) {
+            return true;
+        }
+        String cls = e.getClass().getName();
+        String msg = e.getMessage();
+        if (msg != null) {
+            String low = msg.toLowerCase();
+            if (low.contains("timed out") || low.contains("timeout")
+                    || low.contains("refused") || low.contains("reset")
+                    || low.contains("broken pipe") || low.contains("unreachable")) {
+                return true;
+            }
+        }
+        if (cls.contains("SocketTimeout") || cls.contains("ConnectException")
+                || cls.contains("UnknownHost") || cls.contains("ConnectException")) {
+            return true;
+        }
+        return false;
+    }
+
+    // 流式解析 JSON，避免大响应构造 String（byte[]+char[] 双倍内存）
+    public static JSONObject getJsonStream(String url, ArrayList headers) throws IOException, JSONException {
+        IOException lastException = null;
+        for (int attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
+            if (attempt > 0) {
+                sleepBeforeRetry(attempt);
+            }
+            try {
+                return doGetJsonStreamOnce(url, headers);
+            } catch (JSONException e) {
+                if (attempt < MAX_RETRY_COUNT) {
+                    Log.w("NetDiag", "getJsonStream 空/异常响应 " + hostOf(url) + " 将重试 (attempt=" + attempt + ")");
+                    continue;
+                }
+                throw e;
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt < MAX_RETRY_COUNT && isRetryable(e)) {
+                    Log.w("NetDiag", "getJsonStream 重试 " + hostOf(url) + " " + e.getClass().getSimpleName() + " (attempt=" + attempt + ")");
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastException != null ? lastException : new IOException("请求失败");
+    }
+
+    private static JSONObject doGetJsonStreamOnce(String url, ArrayList headers) throws IOException, JSONException {
+        HttpURLConnection conn = null;
+        InputStream is = null;
+        try {
+            Log.d("NetDiag", "getJsonStream 开始 " + hostOf(url));
+            conn = createConnection(url, "GET", headers);
+            conn.connect();
+            int responseCode = conn.getResponseCode();
+            Log.d("NetDiag", "getJsonStream 响应码=" + responseCode + " " + hostOf(url));
+            is = responseCode >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (is == null) {
+                throw new JSONException("在访问 " + url + " 时返回数据为空");
+            }
+
+            // 先读完整文本再解析，避免 HTML 错误页被 JSONTokener 解析成 "Value <br ..."
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(is, "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            char[] buf = new char[4096];
+            int n;
+            while ((n = br.read(buf)) != -1) {
+                sb.append(buf, 0, n);
+            }
+            br.close();
+            is.close();
+            is = null;
+            String setCookie = collectSetCookies(conn);
+            if (setCookie != null && setCookie.length() > 0) saveCookieFromHeader(setCookie);
+            return parseJsonString(sb.toString(), url);
+        } finally {
+            if (is != null) try { is.close(); } catch (Exception ignored) {}
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String readStreamRemaining(InputStream is) throws IOException {
+        java.util.ArrayList chunks = new java.util.ArrayList();
+        byte[] buffer = new byte[4096];
+        int total = 0;
+        int maxBytes = 3 * 1024 * 1024;
+        int len;
+        while ((len = is.read(buffer, 0, buffer.length)) != -1) {
+            total += len;
+            if (total > maxBytes) {
+                throw new java.io.IOException("响应数据过大 (" + total + " 字节)");
+            }
+            byte[] chunk = new byte[len];
+            System.arraycopy(buffer, 0, chunk, 0, len);
+            chunks.add(chunk);
+        }
+        byte[] allBytes = new byte[total];
+        int offset = 0;
+        for (int i = 0; i < chunks.size(); i++) {
+            byte[] chunk = (byte[]) chunks.get(i);
+            System.arraycopy(chunk, 0, allBytes, offset, chunk.length);
+            offset += chunk.length;
+        }
+        chunks.clear();
+        return new String(allBytes, "UTF-8");
+    }
+
+    private static String collectSetCookies(HttpURLConnection conn) {
+        try {
+            Map<String, List<String>> headerFields = conn.getHeaderFields();
+            if (headerFields == null) return null;
+            // getHeaderFields() 的 key 大小写不保证，需大小写不敏感匹配，
+            // 否则服务器返回 "set-cookie"（小写）时会漏收集，导致登录 Cookie 不完整
+            List<String> setCookies = null;
+            for (Iterator it = headerFields.keySet().iterator(); it.hasNext(); ) {
+                String key = (String) it.next();
+                if (key != null && key.equalsIgnoreCase("Set-Cookie")) {
+                    setCookies = headerFields.get(key);
+                    break;
+                }
+            }
+            if (setCookies == null) return null;
+            StringBuffer sb = new StringBuffer();
+            for (int i = 0; i < setCookies.size(); i++) {
+                String sc = setCookies.get(i);
+                if (sc == null) continue;
+                String clean = extractCookiePairs(sc);
+                if (clean != null && clean.length() > 0) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(clean);
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static synchronized void saveCookieFromHeader(String setCookie) {
+        String cookiePure = extractCookiePairs(setCookie);
+        if (cookiePure == null || cookiePure.length() == 0) {
+            return;
+        }
+
+        String merged = mergeCookies(sCookieString, cookiePure);
+        sCookieString = merged;
+        SharedPreferencesUtil.putString("cookies", merged);
+
+        String mid = getInfoFromCookie("DedeUserID", merged);
+        // Otto 登录后 mid 必须是 Otto uid；勿被 B 站 Cookie 的 DedeUserID 覆盖，
+        // 否则「关注的人」列表请求 /api/following/list/{错误 mid} 会失败。
+        if (mid != null && mid.length() > 0 && !cn.ottohub.oh2013.api.OttoAuthApi.isLoggedIn()) {
+            try {
+                SharedPreferencesUtil.putLong(SharedPreferencesUtil.mid, Long.parseLong(mid));
+            } catch (NumberFormatException e) {}
+        }
+
+        // 现在的扫码登录凭证来自跨域 Set-Cookie（URL 里只有 ticket/gourl），
+        // 必须把 bili_jct 同步到 csrf key，否则点赞/评论/关注等 POST 用的 csrf 为空 → 操作失败
+        String csrf = getInfoFromCookie("bili_jct", merged);
+        if (csrf != null && csrf.length() > 0) {
+            SharedPreferencesUtil.putString("csrf", csrf);
+        }
+    }
+
+    private static String extractCookiePairs(String setCookie) {
+        if (setCookie == null) return "";
+        StringBuffer sb = new StringBuffer();
+        String[] parts = setCookie.split(";");
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i].trim();
+            if (part.indexOf("=") != -1 &&
+                    !part.startsWith("Path") &&
+                    !part.startsWith("Domain") &&
+                    !part.startsWith("Expires") &&
+                    !part.startsWith("Secure") &&
+                    !part.startsWith("HttpOnly") &&
+                    !part.startsWith("SameSite")) {
+                if (sb.length() > 0) sb.append("; ");
+                sb.append(part);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String cleanCookieString(String cookie) {
+        if (cookie == null || cookie.length() == 0) return "";
+        StringBuffer sb = new StringBuffer();
+        String[] pairs = cookie.split("; ");
+        for (int i = 0; i < pairs.length; i++) {
+            String pair = pairs[i].trim();
+            if (pair.indexOf("=") != -1 && !isSetCookieAttribute(pair)) {
+                if (sb.length() > 0) sb.append("; ");
+                sb.append(pair);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static boolean isSetCookieAttribute(String part) {
+        if (part == null) return false;
+        String lower = part.toLowerCase();
+        return lower.startsWith("path") ||
+                lower.startsWith("domain") ||
+                lower.startsWith("expires") ||
+                lower.startsWith("secure") ||
+                lower.startsWith("httponly") ||
+                lower.startsWith("samesite") ||
+                lower.startsWith("max-age") ||
+                lower.startsWith("comment") ||
+                lower.startsWith("discard");
+    }
+
+    /**
+     * 获取 buvid3（设备标识）
+     * 需要先请求 B站 首页，从 Set-Cookie 中提取
+     */
+    private static String randomHex(int len) {
+        java.util.Random rnd = new java.util.Random();
+        String hex = "0123456789abcdef";
+        StringBuffer sb = new StringBuffer();
+        for (int i = 0; i < len; i++) {
+            sb.append(hex.charAt(rnd.nextInt(hex.length())));
+        }
+        return sb.toString();
+    }
+
+    public static synchronized String fetchBuvid3() {
+        try {
+            String url = "https://www.bilibili.com";
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            if (url.startsWith("https") && conn instanceof HttpsURLConnection) {
+                SSLSocketFactory sslFactory = getTrustAllSSLSocketFactory();
+                if (sslFactory != null) {
+                    ((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
+                    ((HttpsURLConnection) conn).setHostnameVerifier(TRUST_ALL_HOSTNAMES);
+                }
+            }
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", USER_AGENT_WEB);
+            conn.setRequestProperty("Accept-Language", getAcceptLanguage());
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(12000);
+            conn.setInstanceFollowRedirects(false);
+            conn.connect();
+
+            Map<String, List<String>> headerFields = conn.getHeaderFields();
+            List<String> setCookies = headerFields.get("Set-Cookie");
+            conn.disconnect();
+
+            if (setCookies != null) {
+                StringBuffer allCookies = new StringBuffer();
+                for (int i = 0; i < setCookies.size(); i++) {
+                    String sc = (String) setCookies.get(i);
+                    if (sc != null) {
+                        String clean = extractCookiePairs(sc);
+                        if (clean != null && clean.length() > 0) {
+                            if (allCookies.length() > 0) allCookies.append("; ");
+                            allCookies.append(clean);
+                        }
+                        if (sc.contains("bili_ticket") || sc.contains("sid=") || sc.contains("DedeUserID__ckMd5")) {
+                            Log.d("NetWorkUtil", "首页Set-Cookie关键: " + extractCookiePairs(sc));
+                        }
+                    }
+                }
+                String merged = allCookies.toString();
+                if (merged.length() > 0) {
+                    Log.d("NetWorkUtil", "首页Set-Cookie全部: " + merged);
+                    String existing = SharedPreferencesUtil.getString("cookies", "");
+                    String newCookie = mergeCookies(existing, merged);
+                    SharedPreferencesUtil.putString("cookies", newCookie);
+                    setCookieString(newCookie);
+                    // 补充浏览器必备 cookie
+                    ensureBrowserCookies();
+                    String buvid3 = getInfoFromCookie("buvid3", merged);
+                    if (buvid3 != null && buvid3.length() > 0) {
+                        Log.d("NetWorkUtil", "获取到 buvid3: " + buvid3);
+                        return buvid3;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e("NetWorkUtil", "获取 buvid3 失败: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private static void closeQuietly(java.io.Closeable c) {
+        if (c != null) {
+            try {
+                c.close();
+            } catch (Exception e) {}
+        }
+    }
+
+    // 工具方法
+
+    public static byte[] readStream(InputStream inStream) throws IOException {
+        ByteArrayOutputStream outStream = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int len;
+        while ((len = inStream.read(buffer)) != -1) {
+            outStream.write(buffer, 0, len);
+        }
+        outStream.close();
+        inStream.close();
+        return outStream.toByteArray();
+    }
+
+    public static class FormData {
+        private final Map data;
+        private boolean isUrlParam;
+
+        public FormData() {
+            data = new HashMap();
+        }
+
+        public FormData remove(String key) {
+            data.remove(key);
+            return this;
+        }
+
+        public FormData put(String key, Object value) {
+            data.put(key, String.valueOf(value));
+            return this;
+        }
+
+        public FormData setUrlParam(boolean isUrlParam) {
+            this.isUrlParam = isUrlParam;
+            return this;
+        }
+
+        public String toString() {
+            StringBuffer sb = new StringBuffer();
+            if (isUrlParam) {
+                sb.append("?");
+            }
+            try {
+                for (Object o : data.keySet()) {
+                    String key = (String) o;
+                    if (sb.length() > (isUrlParam ? 1 : 0)) {
+                        sb.append("&");
+                    }
+                    sb.append(URLEncoder.encode(key, "UTF-8"));
+                    sb.append("=");
+                    sb.append(URLEncoder.encode((String) data.get(key), "UTF-8"));
+                }
+            } catch (UnsupportedEncodingException e) {
+                throw new RuntimeException(e.getMessage());
+            }
+            return sb.toString();
+        }
+    }
+}

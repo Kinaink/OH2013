@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#3F51B5</color>
+    <color name="colorPrimaryDark">#303F9F</color>
+    <color name="colorAccent">#FF8C00</color>
+
+    <!-- Progress colors -->
+    <color name="_progress__green">#afcfff66</color>
+    <color name="_progress__gray">#dfa5a5a5</color>
+    <color name="_progress__alpha_gray">#b2646464</color>
+    <color name="_progress__pink">#FF8C00</color>
+    <color name="_progress__aplha_pink">#4cFF8C00</color>
+
+    <!-- Player colors -->
+    <color name="videoplay__preloading_status_bar_text">#616161</color>
+    <color name="videoplay__preloading_status_bar_bkgd">#f3f3f3</color>
+    <color name="videoplay__video_title_text">#ffffff</color>
+    <color name="videoplay__control_panel_bkgd">#c8000000</color>
+    <color name="videoplay__seekbar_boarder">#797979</color>
+    <color name="videoplay__seekbar_progress">#bababa</color>
+    <color name="videoplay__seekbar_secondary_progress">#dfa5a5a5</color>
+    <color name="videoplay__preloading_background">#bababa</color>
+    <color name="videoplay__preloading_background_translucent">#abbababa</color>
+    <color name="videoplay__control_panel_bkgd_new">#df131314</color>
+    <color name="videoplay__text">#FF8C00</color>
+
+    <!-- Color aliases -->
+    <color name="_text__white">#ffffff</color>
+    <color name="_text__gray_dark">#616161</color>
+    <color name="_text__gray">#797979</color>
+    <color name="_text__gray_light">#bababa</color>
+    <color name="_text__gray_translucent_light">#abbababa</color>
+    <color name="_text__pink">#FF8C00</color>
+    <color name="_bkgd__gray">#a5a5a5</color>
+    <color name="_bkgd__gray_light">#bababa</color>
+    <color name="_bkgd__translucent">#c8000000</color>
+    <color name="_bkgd__translucent_gray_dark">#df131314</color>
+    <color name="_bkgd__pink_light">#ffffe0cc</color>
+    <color name="_bkgd__pink_dark">#ffe67300</color>
+    <color name="_bkgd__white_abs">#ffffff</color>
+    <color name="_bkgd__white_dark">#f3f3f3</color>
+    <color name="underline_color">#99444444</color>
+    <color name="abcp_pink__holo_pink_light">#FF8C00</color>
+    <color name="abcp__primary_text_disable_only_holo_dark">#90ffffff</color>
+    <color name="global__text">#ffffff</color>
+    <color name="TextColorBlack">#ff000000</color>
+    <color name="videobrief__title_text">@color/global__text</color>
+</resources>

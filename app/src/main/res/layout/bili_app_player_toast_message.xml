@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:gravity="center"
+    android:orientation="horizontal"
+    android:background="@color/videoplay__control_panel_bkgd_new"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:minWidth="110dp">
+    <TextView
+        android:textSize="17sp"
+        android:textColor="@color/videoplay__video_title_text"
+        android:gravity="center"
+        android:id="@+id/message"
+        android:padding="5dp"
+        android:paddingLeft="10dp"
+        android:paddingRight="10dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="90dp"
+        android:minHeight="17dp"
+        android:singleLine="false"
+        style="@style/PlayerControlBarButton"/>
+</LinearLayout>

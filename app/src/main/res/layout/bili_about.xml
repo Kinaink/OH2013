@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <LinearLayout
+        android:orientation="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp">
+
+        <!-- 应用信息卡片 -->
+        <LinearLayout
+            android:orientation="vertical"
+            android:background="#1A1A1A"
+            android:padding="12dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <TextView
+                android:id="@+id/app_brief"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:textSize="16sp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:padding="8dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#333333"
+                android:layout_margin="8dp" />
+
+            <TableLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+                <TableRow>
+                    <TextView
+                        style="@style/AboutTableText"
+                        android:text="@string/bili_about_53cd" />
+                    <TextView
+                        style="@style/AboutTableText"
+                        android:text="@string/bili_about_qq_group" />
+                </TableRow>
+                <TableRow>
+                    <TextView
+                        style="@style/AboutTableText"
+                        android:text="@string/bili_about_53cd_1" />
+                    <TextView
+                        android:id="@+id/release_website"
+                        style="@style/AboutTableText" />
+                </TableRow>
+            </TableLayout>
+
+        </LinearLayout>
+
+        <!-- STAFF 区域 -->
+        <TextView
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_staff"
+            android:textSize="14sp"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp"
+            android:padding="8dp" />
+
+        <TextView
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_539f"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/bilibili_website"
+            style="@style/AboutBodyText" />
+
+        <TextView
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_4f01"
+            android:layout_marginTop="12dp" />
+
+        <TableLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp">
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_9bishi" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_4e00" />
+            </TableRow>
+        </TableLayout>
+
+        <TextView
+            android:id="@+id/textView"
+            style="@style/AboutBodyText"
+            android:layout_marginTop="12dp"
+            android:text="@string/bili_about_8f6f" />
+
+        <TableLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp">
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_4e00" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_skyler1n" />
+            </TableRow>
+        </TableLayout>
+
+        <TextView
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_7cfb"
+            android:layout_marginTop="12dp" />
+
+        <TextView
+            android:id="@+id/tv_system_architect"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_bbcallen" />
+
+        <TextView
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_5f00"
+            android:layout_marginTop="12dp" />
+
+        <TextView
+            android:id="@+id/tv_open_source_0"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_os_ijkplayer" />
+
+        <TextView
+            android:id="@+id/tv_open_source_1"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_os_biliclient" />
+
+        <TextView
+            android:id="@+id/tv_open_source_2"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_os_wristbilibili" />
+
+        <TextView
+            android:id="@+id/tv_open_source_3"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_os_bilitv_repair" />
+
+        <TextView
+            android:id="@+id/tv_open_source_4"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_os_danmaku" />
+
+        <TextView
+            android:id="@+id/tv_open_source_5"
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_os_api_collect" />
+
+        <!-- 特别鸣谢 -->
+        <TextView
+            style="@style/AboutBodyText"
+            android:text="@string/bili_about_7279"
+            android:layout_marginTop="12dp" />
+
+        <TableLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_xiaosuyang" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_cctyl" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_9010" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_wcxawa" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_moreixima" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_liumu" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_6d41" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_chuichui" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_nullnanerror" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_mongou666" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_biribili_user" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_6c34" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_mc_windows" />
+                <TextView
+                    android:id="@+id/textView4"
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_steven_rong" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_budong" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_662f" />
+            </TableRow>
+        </TableLayout>
+
+        <!-- 赞助 -->
+        <TextView
+            android:id="@+id/thanks"
+            style="@style/AboutBodyText"
+            android:layout_marginTop="12dp"
+            android:text="@string/bili_about_8d5e" />
+
+        <TableLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp">
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_wcxawa" />
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_skyler1n" />
+            </TableRow>
+            <TableRow>
+                <TextView
+                    style="@style/AboutTableText"
+                    android:text="@string/bili_about_8001" />
+            </TableRow>
+        </TableLayout>
+
+        <!-- 监督区域 -->
+        <LinearLayout
+            android:orientation="vertical"
+            android:id="@+id/director"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp">
+
+            <TextView
+                style="@style/AboutBodyText"
+                android:text="@string/bili_about_76d1" />
+
+            <TextView
+                style="@style/AboutBodyText"
+                android:text="@string/bili_about_9010" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</ScrollView>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/unlock_group"
+    android:fitsSystemWindows="false"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:contentDescription="@string/ACD_LockView">
+    <ImageView
+        android:id="@+id/unlock_left"
+        android:background="@drawable/bili_gray_semi_circle_right"
+        android:paddingLeft="0dp"
+        android:paddingTop="0dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="8dp"
+        android:layout_width="56dp"
+        android:layout_height="112dp"
+        android:src="@drawable/ic_player_unlock_2"
+        android:layout_alignParentLeft="true"
+        android:layout_centerVertical="true"
+        android:contentDescription="@null"
+        style="@style/PlayerControlBarButton"/>
+    <ImageView
+        android:id="@+id/unlock_right"
+        android:background="@drawable/bili_gray_semi_circle_left"
+        android:paddingLeft="8dp"
+        android:paddingTop="0dp"
+        android:paddingRight="0dp"
+        android:paddingBottom="8dp"
+        android:layout_width="56dp"
+        android:layout_height="112dp"
+        android:src="@drawable/ic_player_unlock_2"
+        android:layout_alignParentRight="true"
+        android:layout_centerVertical="true"
+        android:contentDescription="@null"
+        style="@style/PlayerControlBarButton"/>
+</RelativeLayout>

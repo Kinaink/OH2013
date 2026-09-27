@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- skip_loop_filter 档位 -->
+    <string-array name="decoder_skip_loop_filter_entries">
+        <item>None: 画质最平滑</item>
+        <item>Non-Ref: 平衡</item>
+        <item>Bi-Dir: 可能出现马赛克</item>
+        <item>Non-Key: 可能出现马赛克</item>
+        <item>All: 性能最好,可能出现马赛克</item>
+    </string-array>
+    <string-array name="decoder_skip_loop_filter_values">
+        <item>-16</item>
+        <item>16</item>
+        <item>8</item>
+        <item>32</item>
+        <item>48</item>
+    </string-array>
+
+    <!-- skip_frame -->
+    <string-array name="decoder_skip_frame_entries">
+        <item>不跳过任何帧</item>
+        <item>默认策略</item>
+        <item>跳过非参考帧</item>
+        <item>跳过双向预测帧</item>
+        <item>跳过非关键帧</item>
+        <item>跳过所有帧</item>
+    </string-array>
+    <string-array name="decoder_skip_frame_values">
+        <item>-16</item>
+        <item>0</item>
+        <item>8</item>
+        <item>16</item>
+        <item>32</item>
+        <item>48</item>
+    </string-array>
+
+    <!-- framedrop -->
+    <string-array name="decoder_framedrop_entries">
+        <item>不丢帧</item>
+        <item>默认</item>
+        <item>积极丢帧</item>
+        <item>较积极</item>
+        <item>轻度丢帧</item>
+        <item>极轻度</item>
+    </string-array>
+    <string-array name="decoder_framedrop_values">
+        <item>-1</item>
+        <item>0</item>
+        <item>1</item>
+        <item>5</item>
+        <item>30</item>
+        <item>120</item>
+    </string-array>
+
+    <!-- max-fps -->
+    <string-array name="decoder_maxfps_entries">
+        <item>不限制</item>
+        <item>15 fps</item>
+        <item>24 fps</item>
+        <item>30 fps</item>
+        <item>60 fps</item>
+        <item>121 fps</item>
+    </string-array>
+    <string-array name="decoder_maxfps_values">
+        <item>-1</item>
+        <item>15</item>
+        <item>24</item>
+        <item>30</item>
+        <item>60</item>
+        <item>121</item>
+    </string-array>
+
+    <!-- video-pictq-size -->
+    <string-array name="decoder_pictq_size_entries">
+        <item>3 帧 (默认, 最小延迟)</item>
+        <item>4 帧</item>
+        <item>5 帧</item>
+        <item>6 帧</item>
+        <item>8 帧</item>
+        <item>10 帧</item>
+        <item>16 帧 (最大, 最流畅)</item>
+    </string-array>
+    <string-array name="decoder_pictq_size_values">
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>8</item>
+        <item>10</item>
+        <item>16</item>
+    </string-array>
+
+    <!-- 开发中的东西 -->
+    <!-- video_quality -->
+    <string-array name="video_quality_entries">
+        <item>流畅 360P</item>
+        <item>清晰 480P</item>
+        <item>高清 720P</item>
+    </string-array>
+    <string-array name="video_quality_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <!-- completion_action -->
+    <string-array name="completion_action_entries">
+        <item>AAA</item>
+        <item>BBB</item>
+        <item>CCC</item>
+        <item>DDD</item>
+    </string-array>
+    <string-array name="completion_action_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+
+    <!-- player_preference -->
+    <string-array name="player_entries">
+        <item>内置播放器</item>
+        <item>系统播放器</item>
+    </string-array>
+    <string-array name="player_values">
+        <item>114514</item>
+        <item>1919810</item>
+    </string-array>
+
+    <!-- decoder_entries -->
+    <string-array name="decoder_entries">
+        <item>系统硬解</item>
+        <item>软件解码器</item>
+    </string-array>
+    <string-array name="decoder_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <!-- tab_entries -->
+    <string-array name="tab_entries">
+        <item>推荐</item>
+        <item>热门</item>
+        <item>追番</item>
+        <item>动态</item>
+    </string-array>
+    <string-array name="tab_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+
+    <!-- image_thread_entries -->
+    <string-array name="image_thread_entries">
+        <item>1 线程</item>
+        <item>3 线程</item>
+    </string-array>
+    <string-array name="image_thread_values">
+        <item>1</item>
+        <item>3</item>
+    </string-array>
+
+</resources>

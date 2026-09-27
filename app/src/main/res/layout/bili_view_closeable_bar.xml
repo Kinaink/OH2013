@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:background="@color/videoplay__control_panel_bkgd_new"
+    android:paddingLeft="10dp"
+    android:paddingRight="10dp"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="30dp">
+    <TextView
+        android:textSize="17sp"
+        android:textColor="@color/videoplay__video_title_text"
+        android:gravity="center"
+        android:layout_gravity="center"
+        android:id="@+id/title"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:singleLine="true"/>
+    <ImageView
+        android:layout_gravity="center|right"
+        android:id="@+id/close"
+        android:padding="10dp"
+        android:focusable="true"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:src="@drawable/ic_player_pannel_close"
+        android:scaleType="center"
+        android:contentDescription="@null"
+        style="@style/PlayerControlBarButton"/>
+</FrameLayout>

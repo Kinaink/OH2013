@@ -1,0 +1,1245 @@
+package cn.ottohub.oh2013;
+
+import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Vibrator;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.AbsListView;
+import android.widget.AdapterView;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.net.URLEncoder;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import cn.ottohub.oh2013.api.ConfInfoApi;
+import cn.ottohub.oh2013.api.BilibiliIDConverter;
+import cn.ottohub.oh2013.util.KeyBindingUtil;
+import cn.ottohub.oh2013.util.NetWorkUtil;
+import cn.ottohub.oh2013.util.MsgUtil;
+import cn.ottohub.oh2013.util.SharedPreferencesUtil;
+import cn.ottohub.oh2013.util.StringUtil;
+
+public class SearchActivity extends BaseActivity {
+
+    private EditText searchEdit;
+    private ImageView backBtn;
+    private ImageView searchAction;
+    private ListView resultList;
+    private TextView emptyView;
+    private LinearLayout topLoading;
+    private ProgressBar topProgress;
+    private View footerView;
+    private ProgressBar footerProgressBar;
+
+    // 搜索历史
+    private LinearLayout historyContainer;
+    private LinearLayout historyListContainer;
+    private TextView clearHistoryBtn;
+    private LinearLayout historyEmptyView;
+    private static final String KEY_SEARCH_HISTORY = "search_history";
+
+    private SearchResultAdapter adapter;
+    private List<SearchResultItem> resultListData = new ArrayList<SearchResultItem>();
+
+    // 键盘光标选中的项，-1 表示无选中
+    private int selectedPosition = -1;
+
+    private String currentKeyword = "";
+    private int currentPage = 1;
+    private boolean isLoading = false;
+    private boolean isEnd = false;
+    private boolean hasSearched = false;
+
+    private Handler retryHandler = new Handler();
+    private int searchSeq = 0;
+
+    private static final Pattern AV_PATTERN = Pattern.compile("(?:av|ov)(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BV_PATTERN = Pattern.compile("bv([a-zA-Z0-9]{10})", Pattern.CASE_INSENSITIVE);
+    private static final Pattern OB_PATTERN = Pattern.compile("ob(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern OID_PATTERN = Pattern.compile("oid(\\d+)", Pattern.CASE_INSENSITIVE);
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        try {
+            setContentView(R.layout.activity_search);
+        } catch (Exception e) {
+            android.util.Log.w("SearchActivity", "Could not inflate search layout", e);
+            setContentView(new TextView(this));
+            return;
+        }
+
+        searchEdit = (EditText) findViewById(R.id.search_edit);
+        backBtn = (ImageView) findViewById(R.id.back);
+        searchAction = (ImageView) findViewById(R.id.search_action);
+        resultList = (ListView) findViewById(R.id.result_list);
+        emptyView = (TextView) findViewById(R.id.empty_view);
+        topLoading = (LinearLayout) findViewById(R.id.top_loading);
+        topProgress = (ProgressBar) findViewById(R.id.top_progress);
+
+        // 搜索历史
+        historyContainer = (LinearLayout) findViewById(R.id.history_container);
+        historyListContainer = (LinearLayout) findViewById(R.id.history_list_container);
+        clearHistoryBtn = (TextView) findViewById(R.id.clear_history);
+        historyEmptyView = (LinearLayout) findViewById(R.id.history_empty);
+
+        footerView = getLayoutInflater().inflate(R.layout.list_footer, null);
+        footerProgressBar = (ProgressBar) footerView.findViewById(R.id.footer_progress);
+        footerView.setVisibility(View.GONE);
+
+        resultList.addFooterView(footerView, null, false);
+
+        // 背景是平铺纹理位图：必须显式透明 cacheColorHint，否则 2.x 滚动/加载更多时
+        // 绘制缓存用默认颜色填充，透明的 footer 区域露出纯色底 → footer 背景闪烁
+        resultList.setCacheColorHint(0x00000000);
+
+        adapter = new SearchResultAdapter(this, resultListData);
+        resultList.setAdapter(adapter);
+
+        // TV 模式适配：让 ListView 可聚焦
+        resultList.setFocusable(true);
+        resultList.setFocusableInTouchMode(true);
+
+        // 搜索历史加载
+        loadSearchHistory();
+
+        // 清空历史
+        if (clearHistoryBtn != null) {
+            clearHistoryBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clearSearchHistory();
+                }
+            });
+        }
+
+        resultList.setOnScrollListener(new AbsListView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(AbsListView view, int scrollState) {
+                if (scrollState == SCROLL_STATE_IDLE) {
+                    adapter.setScrolling(false);
+                    // 滚动结束：仍保持高亮隐藏，等待再次按键恢复（避免光标跳到触摸滚动到的位置）
+                    int lastVisible = view.getLastVisiblePosition();
+                    int totalCount = adapter.getCount();
+                    if (hasSearched && lastVisible >= totalCount - 1 && !isLoading && !isEnd && totalCount > 0) {
+                        loadMoreResults();
+                    }
+                } else {
+                    adapter.setScrolling(true);
+                    // 开始触摸滚动/甩动：隐藏光标高亮
+                    adapter.setHideHighlight(true);
+                }
+            }
+
+            @Override
+            public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
+                if (hasSearched && !isLoading && !isEnd && totalItemCount > 0) {
+                    if (firstVisibleItem + visibleItemCount >= totalItemCount - 5) {
+                        loadMoreResults();
+                    }
+                }
+            }
+        });
+
+        resultList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                if (view == footerView) {
+                    return;
+                }
+                if (position >= resultListData.size()) {
+                    return;
+                }
+                SearchResultItem item = resultListData.get(position);
+                if (item == null) {
+                    return;
+                }
+
+                if (item.isBlog) {
+                    Intent intent = new Intent(SearchActivity.this, BlogDetailActivity.class);
+                    intent.putExtra("bid", item.aid);
+                    intent.putExtra("title", item.title != null
+                            ? item.title.replace("[动态] ", "") : ("ob" + item.aid));
+                    intent.putExtra("content", item.blogContent);
+                    intent.putExtra("username", item.author);
+                    intent.putExtra("time", item.blogTime);
+                    startActivity(intent);
+                    return;
+                }
+
+                Intent intent = new Intent(SearchActivity.this, VideoDetailActivity.class);
+                if (item.aid != 0) {
+                    intent.putExtra("aid", item.aid);
+                } else if (item.bvid != null && item.bvid.length() > 0) {
+                    intent.putExtra("bvid", item.bvid);
+                } else {
+                    Toast.makeText(SearchActivity.this, SearchActivity.this.getString(R.string.searchactivity_toast_65e0), Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                startActivity(intent);
+            }
+        });
+
+        backBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                finish();
+            }
+        });
+
+        searchAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performSearch();
+            }
+        });
+
+        searchEdit.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            @Override
+            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+                if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                    performSearch();
+                    return true;
+                }
+                if (event != null && event.getAction() == KeyEvent.ACTION_DOWN
+                        && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
+                    if (event.getRepeatCount() == 0) {
+                        performSearch();
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
+
+        // TV 模式：搜索框也要能聚焦
+        searchEdit.setFocusable(true);
+        searchEdit.setFocusableInTouchMode(true);
+        searchEdit.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        searchEdit.setSingleLine(true);
+
+        String keyword = getIntent().getStringExtra("keyword");
+        if (keyword != null && keyword.length() > 0) {
+            searchEdit.setText(keyword);
+            performSearch();
+        }
+
+        // 让搜索框获得焦点（TV 模式）
+        searchEdit.post(new Runnable() {
+            @Override
+            public void run() {
+                searchEdit.requestFocus();
+            }
+        });
+    }
+
+    // 加载搜索历史
+    private void loadSearchHistory() {
+        String historyJson = SharedPreferencesUtil.getString(KEY_SEARCH_HISTORY, "");
+        if (historyJson == null || historyJson.length() == 0) {
+            if (historyEmptyView != null) {
+                historyEmptyView.setVisibility(View.VISIBLE);
+            }
+            return;
+        }
+
+        try {
+            JSONArray arr = new JSONArray(historyJson);
+            if (arr.length() == 0) {
+                if (historyEmptyView != null) {
+                    historyEmptyView.setVisibility(View.VISIBLE);
+                }
+                return;
+            }
+
+            if (historyEmptyView != null) {
+                historyEmptyView.setVisibility(View.GONE);
+            }
+
+            if (historyListContainer != null) {
+                historyListContainer.removeAllViews();
+            }
+
+            for (int i = 0; i < arr.length(); i++) {
+                final String keyword = arr.getString(i);
+                View historyItem = getLayoutInflater().inflate(R.layout.item_search_history, null);
+                TextView tvKeyword = (TextView) historyItem.findViewById(R.id.history_keyword);
+                tvKeyword.setText(keyword);
+
+                historyItem.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        searchEdit.setText(keyword);
+                        performSearch();
+                    }
+                });
+
+                // TV 焦点支持
+                historyItem.setFocusable(true);
+                historyItem.setFocusableInTouchMode(true);
+
+                // 焦点效果（反射）
+                historyItem.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                    @Override
+                    public void onFocusChange(View v, boolean hasFocus) {
+                        try {
+                            if (hasFocus) {
+                                // setScaleX/Y (API 11+)
+                                try {
+                                    java.lang.reflect.Method setScaleX = View.class.getMethod("setScaleX", float.class);
+                                    setScaleX.invoke(v, 1.05f);
+                                } catch (Exception e) {}
+                                try {
+                                    java.lang.reflect.Method setScaleY = View.class.getMethod("setScaleY", float.class);
+                                    setScaleY.invoke(v, 1.05f);
+                                } catch (Exception e) {}
+                                // setBackgroundColor (API 1+)
+                                v.setBackgroundColor(0x33FFFFFF);
+                            } else {
+                                try {
+                                    java.lang.reflect.Method setScaleX = View.class.getMethod("setScaleX", float.class);
+                                    setScaleX.invoke(v, 1.0f);
+                                } catch (Exception e) {}
+                                try {
+                                    java.lang.reflect.Method setScaleY = View.class.getMethod("setScaleY", float.class);
+                                    setScaleY.invoke(v, 1.0f);
+                                } catch (Exception e) {}
+                                v.setBackgroundColor(0x00000000);
+                            }
+                        } catch (Exception e) {
+                            // 反射失败，静默忽略
+                        }
+                    }
+                });
+
+                historyListContainer.addView(historyItem);
+            }
+
+            if (historyContainer != null) {
+                historyContainer.setVisibility(View.VISIBLE);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // 保存搜索历史
+    private void saveSearchHistory(String keyword) {
+        if (keyword == null || keyword.length() == 0) {
+            return;
+        }
+
+        String historyJson = SharedPreferencesUtil.getString(KEY_SEARCH_HISTORY, "");
+        List<String> historyList = new ArrayList<String>();
+
+        try {
+            if (historyJson != null && historyJson.length() > 0) {
+                JSONArray arr = new JSONArray(historyJson);
+                for (int i = 0; i < arr.length(); i++) {
+                    String item = arr.getString(i);
+                    if (!item.equals(keyword)) {
+                        historyList.add(item);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        historyList.add(0, keyword);
+        if (historyList.size() > 10) {
+            historyList = historyList.subList(0, 10);
+        }
+
+        try {
+            JSONArray arr = new JSONArray();
+            for (String item : historyList) {
+                arr.put(item);
+            }
+            SharedPreferencesUtil.putString(KEY_SEARCH_HISTORY, arr.toString());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // 清空搜索历史
+    private void clearSearchHistory() {
+        SharedPreferencesUtil.putString(KEY_SEARCH_HISTORY, "");
+        if (historyListContainer != null) {
+            historyListContainer.removeAllViews();
+        }
+        if (historyEmptyView != null) {
+            historyEmptyView.setVisibility(View.VISIBLE);
+        }
+        if (historyContainer != null) {
+            historyContainer.setVisibility(View.GONE);
+        }
+        Toast.makeText(this, this.getString(R.string.searchactivity_toast_5df2), Toast.LENGTH_SHORT).show();
+    }
+
+    private void showFirstLoading() {
+        historyContainer.setVisibility(View.GONE);
+        resultListData.clear();
+        adapter.notifyDataSetChanged();
+        emptyView.setVisibility(View.GONE);
+        resultList.setVisibility(View.GONE);
+        topLoading.setVisibility(View.VISIBLE);
+        if (topProgress != null) {
+            topProgress.setVisibility(View.VISIBLE);
+        }
+        footerView.setVisibility(View.GONE);
+    }
+
+    private void hideFirstLoadingAndShowList() {
+        topLoading.setVisibility(View.GONE);
+        resultList.setVisibility(View.VISIBLE);
+        emptyView.setVisibility(View.GONE);
+    }
+
+    private void showEmptyResult() {
+        topLoading.setVisibility(View.GONE);
+        footerView.setVisibility(View.GONE);
+        resultList.setVisibility(View.GONE);
+        emptyView.setVisibility(View.VISIBLE);
+    }
+
+    private boolean checkAndJumpToVideo(String input) {
+        if (input == null || input.length() == 0) {
+            return false;
+        }
+        String trimmed = input.trim();
+
+        Matcher oidMatcher = OID_PATTERN.matcher(trimmed);
+        if (oidMatcher.matches()) {
+            try {
+                long oid = Long.parseLong(oidMatcher.group(1));
+                Intent intent = new Intent(SearchActivity.this, UserProfileActivity.class);
+                intent.putExtra("mid", oid);
+                startActivity(intent);
+                return true;
+            } catch (NumberFormatException e) {
+            }
+        }
+
+        Matcher obMatcher = OB_PATTERN.matcher(trimmed);
+        if (obMatcher.matches()) {
+            try {
+                long bid = Long.parseLong(obMatcher.group(1));
+                Intent intent = new Intent(SearchActivity.this, BlogDetailActivity.class);
+                intent.putExtra("bid", bid);
+                startActivity(intent);
+                return true;
+            } catch (NumberFormatException e) {
+            }
+        }
+
+        Matcher avMatcher = AV_PATTERN.matcher(trimmed);
+        if (avMatcher.find()) {
+            String aidStr = avMatcher.group(1);
+            try {
+                final long aid = Long.parseLong(aidStr);
+                Toast.makeText(this, this.getString(R.string.searchactivity_toast_6b63), Toast.LENGTH_SHORT).show();
+                Intent intent = new Intent(SearchActivity.this, VideoDetailActivity.class);
+                intent.putExtra("aid", aid);
+                startActivity(intent);
+                return true;
+            } catch (NumberFormatException e) {
+            }
+        }
+
+        Matcher bvMatcher = BV_PATTERN.matcher(trimmed);
+        if (bvMatcher.find()) {
+            String bvid = bvMatcher.group(1);
+            if (!bvid.startsWith("BV") && !bvid.startsWith("bv")) {
+                bvid = "BV" + bvid;
+            }
+            Toast.makeText(this, this.getString(R.string.searchactivity_toast_6b63), Toast.LENGTH_SHORT).show();
+            Intent intent = new Intent(SearchActivity.this, VideoDetailActivity.class);
+            intent.putExtra("bvid", bvid);
+            startActivity(intent);
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean checkAndTriggerCheatCode(String keyword) {
+        if (keyword == null || keyword.length() == 0) {
+            return false;
+        }
+
+        String lowerKeyword = keyword.toLowerCase();
+
+        // GTA 作弊码 → SettingsActivity
+        if (lowerKeyword.equals("nuttertools") ||
+                lowerKeyword.equals("professionaltools") ||
+                lowerKeyword.equals("thugstools")) {
+
+            try {
+                Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                if (vibrator != null) {
+                    vibrator.vibrate(200);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            Toast.makeText(this, this.getString(R.string.searchactivity_toast_4f5c), Toast.LENGTH_LONG).show();
+
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    startActivity(new Intent(SearchActivity.this, SettingsActivity.class));
+                }
+            }, 800);
+            return true;
+        }
+
+        // giveusatank → 打开神秘页面
+        // 来自 GTA 3 的神秘作弊码……
+        if (lowerKeyword.equals("giveusatank")) {
+            try {
+                Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                if (vibrator != null) {
+                    vibrator.vibrate(300);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            Toast.makeText(this, this.getString(R.string.searchactivity_toast_4f5c), Toast.LENGTH_LONG).show();
+
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    Intent intent = new Intent(SearchActivity.this, WebViewActivity.class);
+                    intent.putExtra("url", "https://www.ottohub.cn/");
+                    intent.putExtra("title", "OTTOhub");
+                    startActivity(intent);
+                }
+            }, 800);
+            return true;
+        }
+
+        // GETTHEREQUICKLY → Metro 主题主页
+        if (lowerKeyword.equals("gettherequickly")) {
+            try {
+                Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                if (vibrator != null) {
+                    vibrator.vibrate(200);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            Toast.makeText(this, this.getString(R.string.searchactivity_toast_4f5c), Toast.LENGTH_LONG).show();
+
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    startActivity(new Intent(SearchActivity.this, MetroHomeActivity.class));
+                }
+            }, 800);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void performSearch() {
+        final String keyword = searchEdit.getText().toString().trim();
+        if (keyword == null || keyword.length() == 0) {
+            Toast.makeText(this, this.getString(R.string.searchactivity_toast_8bf7), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (checkAndTriggerCheatCode(keyword)) {
+            return;
+        }
+
+        if (checkAndJumpToVideo(keyword)) {
+            return;
+        }
+
+        ++searchSeq;
+
+        saveSearchHistory(keyword);
+
+        if (historyContainer != null) {
+            historyContainer.setVisibility(View.GONE);
+        }
+
+        hasSearched = true;
+        isLoading = true;
+        isEnd = false;
+        currentKeyword = keyword;
+        currentPage = 1;
+
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (getCurrentFocus() != null) {
+            imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
+        }
+
+        showFirstLoading();
+        doSearchRequest(keyword, 1, 3);
+    }
+
+    public void onSearchResultClick(SearchActivity.SearchResultItem item, int position) {
+        if (item == null) return;
+        if (item.isBlog) {
+            Intent intent = new Intent(this, BlogDetailActivity.class);
+            intent.putExtra("bid", item.aid);
+            intent.putExtra("title", item.title != null
+                    ? item.title.replace("[动态] ", "") : ("ob" + item.aid));
+            intent.putExtra("content", item.blogContent);
+            intent.putExtra("username", item.author);
+            intent.putExtra("time", item.blogTime);
+            startActivity(intent);
+            return;
+        }
+        Intent intent = new Intent(this, VideoDetailActivity.class);
+        if (item.aid != 0) {
+            intent.putExtra("aid", item.aid);
+        } else if (item.bvid != null && item.bvid.length() > 0) {
+            intent.putExtra("bvid", item.bvid);
+        } else {
+            Toast.makeText(this, getString(R.string.searchactivity_toast_65e0), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startActivity(intent);
+    }
+
+    private void doSearchRequest(final String keyword, final int page, final int retryLeft) {
+        final int curSeq = searchSeq;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final List<SearchResultItem> items = new ArrayList<SearchResultItem>();
+                    org.json.JSONArray videos = cn.ottohub.oh2013.api.SearchApi.search(keyword, page);
+                    if (videos != null) {
+                        for (int i = 0; i < videos.length(); i++) {
+                            cn.ottohub.oh2013.model.VideoCard card =
+                                    cn.ottohub.oh2013.api.OttoApiUtil.parseVideoCard(videos.getJSONObject(i));
+                            SearchResultItem item = new SearchResultItem();
+                            item.title = card.title;
+                            item.cover = card.cover;
+                            item.author = card.upName;
+                            item.aid = card.aid;
+                            item.bvid = card.bvid;
+                            try {
+                                item.play = Integer.parseInt(card.view.replaceAll("[^0-9]", ""));
+                            } catch (Exception e) {
+                                item.play = 0;
+                            }
+                            item.danmaku = card.danmaku;
+                            items.add(item);
+                        }
+                    }
+                    org.json.JSONArray blogs = cn.ottohub.oh2013.api.BlogApi.search(keyword, page);
+                    if (blogs != null) {
+                        for (int i = 0; i < blogs.length(); i++) {
+                            cn.ottohub.oh2013.model.BlogItem blog =
+                                    cn.ottohub.oh2013.api.BlogApi.parseBlog(blogs.getJSONObject(i));
+                            SearchResultItem item = new SearchResultItem();
+                            item.title = "[动态] " + (blog.title != null ? blog.title : ("ob" + blog.bid));
+                            item.cover = null; // 动态结果不展示封面
+                            item.author = blog.username;
+                            item.aid = blog.bid;
+                            item.play = blog.viewCount;
+                            item.danmaku = blog.commentCount;
+                            item.isBlog = true;
+                            item.blogContent = blog.content;
+                            item.blogTime = blog.time;
+                            items.add(item);
+                        }
+                    }
+                    final JSONObject wrapper = new JSONObject();
+                    final JSONObject data = new JSONObject();
+                    final org.json.JSONArray result = new org.json.JSONArray();
+                    for (SearchResultItem it : items) {
+                        JSONObject o = new JSONObject();
+                        o.put("type", it.isBlog ? "blog" : "video");
+                        o.put("title", it.title);
+                        o.put("pic", it.isBlog ? "" : (it.cover != null ? it.cover : ""));
+                        o.put("author", it.author);
+                        o.put("aid", it.aid);
+                        o.put("play", it.play);
+                        o.put("danmaku", it.danmaku);
+                        if (it.isBlog) {
+                            o.put("content", it.blogContent != null ? it.blogContent : "");
+                            o.put("time", it.blogTime != null ? it.blogTime : "");
+                        }
+                        result.put(o);
+                    }
+                    data.put("result", result);
+                    wrapper.put("code", 0);
+                    wrapper.put("data", data);
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (searchSeq != curSeq) return;
+                            handleSearchResponse(wrapper);
+                        }
+                    });
+                } catch (final Exception e) {
+                    e.printStackTrace();
+                    final String errMsg = e.getMessage();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (searchSeq != curSeq) return;
+                            handleNetworkError(errMsg, keyword, retryLeft);
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void handleSearchResponse(JSONObject json) {
+        try {
+            JSONObject data = json.optJSONObject("data");
+            if (data == null) {
+                showEmptyResult();
+                isLoading = false;
+                return;
+            }
+
+            JSONArray result = data.optJSONArray("result");
+            if (result == null || result.length() == 0) {
+                showEmptyResult();
+                isLoading = false;
+                return;
+            }
+
+            List<SearchResultItem> items = new ArrayList<SearchResultItem>();
+            for (int i = 0; i < result.length(); i++) {
+                JSONObject obj = result.getJSONObject(i);
+                String type = obj.optString("type");
+                    if ("blog".equals(type)) {
+                    SearchResultItem item = new SearchResultItem();
+                    item.isBlog = true;
+                    item.title = obj.optString("title");
+                    item.cover = null; // 动态结果不展示封面
+                    item.author = obj.optString("author");
+                    item.aid = obj.optLong("aid", 0);
+                    item.play = obj.optInt("play");
+                    item.danmaku = obj.optInt("danmaku");
+                    item.blogContent = obj.optString("content");
+                    item.blogTime = obj.optString("time");
+                    items.add(item);
+                    continue;
+                }
+                if ("video".equals(type) || type.length() == 0) {
+                    SearchResultItem item = new SearchResultItem();
+                    String title = obj.optString("title");
+                    if (title != null) {
+                        title = title.replaceAll("<em class=\"keyword\">", "");
+                        title = title.replaceAll("</em>", "");
+                        item.title = StringUtil.htmlToString(title);
+                    } else {
+                        item.title = "";
+                    }
+
+                    String pic = obj.optString("pic");
+                    if (pic != null && pic.length() > 0) {
+                        if (pic.startsWith("//")) {
+                            pic = "https:" + pic;
+                        } else if (pic.startsWith("http://")) {
+                            pic = "https://" + pic.substring(7);
+                        } else if (!pic.startsWith("https://")) {
+                            pic = "https://" + pic;
+                        }
+                        item.cover = pic;
+                    }
+                    item.author = obj.optString("author");
+                    item.play = obj.optInt("play");
+                    item.danmaku = obj.optInt("danmaku");
+
+                    long aid = obj.optLong("aid", 0);
+                    String bvid = obj.optString("bvid");
+
+                    if (aid == 0 && bvid != null && bvid.length() > 0) {
+                        try {
+                            aid = BilibiliIDConverter.bvtoaid(bvid);
+                        } catch (Exception e) {
+                            aid = 0;
+                        }
+                    }
+
+                    item.aid = aid;
+                    item.bvid = bvid;
+                    items.add(item);
+                }
+            }
+
+            if (items.size() == 0) {
+                showEmptyResult();
+                isLoading = false;
+                return;
+            }
+
+            resultListData.clear();
+            resultListData.addAll(items);
+            adapter.notifyDataSetChanged();
+
+            hideFirstLoadingAndShowList();
+            isLoading = false;
+
+            if (result.length() >= 20) {
+                currentPage = 2;
+                footerView.setVisibility(View.VISIBLE);
+            } else {
+                isEnd = true;
+                footerView.setVisibility(View.GONE);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            showEmptyResult();
+            isLoading = false;
+        }
+    }
+
+    private void handleSearchError(int code, String message, final String keyword, final int retryLeft) {
+        isLoading = false;
+
+        if (retryLeft > 0 && (code == -400 || message.contains("sign") || message.contains("wbi"))) {
+            MsgUtil.showMsg(this, "签名验证失败，正在重试...");
+            retryHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    doSearchRequest(keyword, 1, retryLeft - 1);
+                }
+            }, 1000);
+        } else if (code == -111) {
+            // B 站对搜索敏感词/被屏蔽内容统一返回 -111 "csrf 校验失败"，并非登录或 csrf 问题。
+            showEmptyResult();
+            emptyView.setText("该关键词暂时无法搜索");
+            MsgUtil.showMsg(this, "该关键词暂时无法搜索");
+        } else {
+            showEmptyResult();
+            emptyView.setText("API错误(" + code + "): " + message);
+            MsgUtil.showMsg(this, "搜索失败: " + message);
+        }
+    }
+
+    private void handleNetworkError(String errMsg, final String keyword, final int retryLeft) {
+        isLoading = false;
+
+        boolean isNetworkError = errMsg != null && (errMsg.contains("Transport endpoint") || errMsg.contains("No route") || errMsg.contains("timeout"));
+
+        if (retryLeft > 0 && isNetworkError) {
+            MsgUtil.showMsg(this, "网络异常，正在重试...(" + retryLeft + ")");
+            retryHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    doSearchRequest(keyword, 1, retryLeft - 1);
+                }
+            }, 1500);
+        } else {
+            showEmptyResult();
+            emptyView.setText("请求失败: " + (errMsg != null ? errMsg : "请检查网络"));
+            MsgUtil.showMsg(this, "请求失败: " + (errMsg != null ? errMsg : "请检查网络"));
+        }
+    }
+
+    private void loadMoreResults() {
+        if (!hasSearched || isLoading || isEnd) return;
+        if (resultListData.size() == 0) return;
+
+        final int nextPage = currentPage;
+
+        isLoading = true;
+        footerView.setVisibility(View.VISIBLE);
+        if (footerProgressBar != null) {
+            footerProgressBar.setVisibility(View.VISIBLE);
+        }
+
+        doLoadMoreRequest(currentKeyword, nextPage, 2);
+    }
+
+    private void doLoadMoreRequest(final String keyword, final int page, final int retryLeft) {
+        final int curSeq = searchSeq;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final List<SearchResultItem> items = new ArrayList<SearchResultItem>();
+                    org.json.JSONArray videos = cn.ottohub.oh2013.api.SearchApi.search(keyword, page);
+                    if (videos != null) {
+                        for (int i = 0; i < videos.length(); i++) {
+                            cn.ottohub.oh2013.model.VideoCard card =
+                                    cn.ottohub.oh2013.api.OttoApiUtil.parseVideoCard(videos.getJSONObject(i));
+                            SearchResultItem item = new SearchResultItem();
+                            item.title = card.title;
+                            item.cover = card.cover;
+                            item.author = card.upName;
+                            item.aid = card.aid;
+                            item.bvid = card.bvid;
+                            item.danmaku = card.danmaku;
+                            items.add(item);
+                        }
+                    }
+                    org.json.JSONArray blogs = cn.ottohub.oh2013.api.BlogApi.search(keyword, page);
+                    if (blogs != null) {
+                        for (int i = 0; i < blogs.length(); i++) {
+                            cn.ottohub.oh2013.model.BlogItem blog =
+                                    cn.ottohub.oh2013.api.BlogApi.parseBlog(blogs.getJSONObject(i));
+                            SearchResultItem item = new SearchResultItem();
+                            item.title = "[动态] " + (blog.title != null ? blog.title : ("ob" + blog.bid));
+                            item.cover = null; // 动态结果不展示封面
+                            item.author = blog.username;
+                            item.aid = blog.bid;
+                            item.danmaku = blog.commentCount;
+                            item.isBlog = true;
+                            item.blogContent = blog.content;
+                            item.blogTime = blog.time;
+                            items.add(item);
+                        }
+                    }
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (searchSeq != curSeq) return;
+                            if (items.size() == 0) {
+                                showNoMore();
+                                return;
+                            }
+                            resultListData.addAll(items);
+                            adapter.notifyDataSetChanged();
+                            footerView.setVisibility(View.GONE);
+                            isLoading = false;
+                            currentPage = page + 1;
+                            isEnd = items.size() < cn.ottohub.oh2013.api.ApiConfig.PAGE_SIZE;
+                        }
+                    });
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (searchSeq != curSeq) return;
+                            handleLoadMoreError(e.getMessage(), keyword, page, retryLeft);
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void handleLoadMoreResponse(JSONObject json, int code, final String keyword, final int page, final int retryLeft) {
+        try {
+            if (code != 0) {
+                if (retryLeft > 0) {
+                    retryHandler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            doLoadMoreRequest(keyword, page, retryLeft - 1);
+                        }
+                    }, 1000);
+                    return;
+                }
+                footerView.setVisibility(View.GONE);
+                isLoading = false;
+                Toast.makeText(this, "加载更多失败: " + json.optString("message"), Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            JSONObject data = json.optJSONObject("data");
+            if (data == null) {
+                showNoMore();
+                return;
+            }
+
+            JSONArray result = data.optJSONArray("result");
+            if (result == null || result.length() == 0) {
+                showNoMore();
+                return;
+            }
+
+            int added = 0;
+            for (int i = 0; i < result.length(); i++) {
+                JSONObject obj = result.getJSONObject(i);
+                if ("video".equals(obj.optString("type"))) {
+                    SearchResultItem item = new SearchResultItem();
+                    String title = obj.optString("title");
+                    if (title != null) {
+                        title = title.replaceAll("<em class=\"keyword\">", "");
+                        title = title.replaceAll("</em>", "");
+                        item.title = StringUtil.htmlToString(title);
+                    } else {
+                        item.title = "";
+                    }
+
+                    String pic = obj.optString("pic");
+                    if (pic != null && pic.length() > 0) {
+                        if (pic.startsWith("//")) {
+                            pic = "https:" + pic;
+                        } else if (pic.startsWith("http://")) {
+                            pic = "https://" + pic.substring(7);
+                        } else if (!pic.startsWith("https://")) {
+                            pic = "https://" + pic;
+                        }
+                        item.cover = pic;
+                    }
+                    item.author = obj.optString("author");
+                    item.play = obj.optInt("play");
+                    item.danmaku = obj.optInt("danmaku");
+
+                    long aid = obj.optLong("aid", 0);
+                    String bvid = obj.optString("bvid");
+
+                    if (aid == 0 && bvid != null && bvid.length() > 0) {
+                        try {
+                            aid = BilibiliIDConverter.bvtoaid(bvid);
+                        } catch (Exception e) {
+                            aid = 0;
+                        }
+                    }
+
+                    item.aid = aid;
+                    item.bvid = bvid;
+                    resultListData.add(item);
+                    added++;
+                }
+            }
+
+            adapter.notifyDataSetChanged();
+            footerView.setVisibility(View.GONE);
+            isLoading = false;
+
+            if (added == 0 || result.length() < 20) {
+                showNoMore();
+            } else {
+                currentPage = page + 1;
+                footerView.setVisibility(View.VISIBLE);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            footerView.setVisibility(View.GONE);
+            isLoading = false;
+            Toast.makeText(this, "解析失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleLoadMoreError(String errMsg, final String keyword, final int page, final int retryLeft) {
+        footerView.setVisibility(View.GONE);
+
+        boolean isNetworkError = errMsg != null && (errMsg.contains("Transport endpoint") || errMsg.contains("No route") || errMsg.contains("timeout"));
+
+        if (retryLeft > 0 && isNetworkError) {
+            retryHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    doLoadMoreRequest(keyword, page, retryLeft - 1);
+                }
+            }, 1500);
+        } else {
+            isLoading = false;
+            Toast.makeText(this, "加载更多失败: " + (errMsg != null ? errMsg : "请检查网络"), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showNoMore() {
+        isEnd = true;
+        footerView.setVisibility(View.GONE);
+        Toast.makeText(this, getString(R.string.emoticon__no_more_data), Toast.LENGTH_SHORT).show();
+    }
+
+    private ArrayList<String> buildHeaders() {
+        ArrayList<String> headers = new ArrayList<String>();
+
+        headers.add("User-Agent");
+        headers.add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+        headers.add("Accept");
+        headers.add("application/json, text/plain, */*");
+
+        headers.add("Accept-Language");
+        headers.add("zh-CN,zh;q=0.9,en;q=0.8");
+
+        headers.add("Accept-Encoding");
+        headers.add("identity");
+
+        headers.add("Referer");
+        headers.add(cn.ottohub.oh2013.api.ApiConfig.SITE_URL);
+
+        headers.add("Origin");
+        headers.add("https://www.ottohub.cn");
+
+        String cookies = SharedPreferencesUtil.getString("cookies", "");
+        if (cookies != null && cookies.length() > 0) {
+            headers.add("Cookie");
+            headers.add(cookies);
+        }
+
+        return headers;
+    }
+
+    /**
+     * 遥控器方向键在搜索结果列表内移动光标（选中高亮），确认键打开视频。
+     * 返回 true 表示事件已被消费。
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (handleRemoteKey(event)) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    /**
+     * 方向键上下移动光标、数字键 2/8 翻页、确认键打开视频。
+     * 仅在已有搜索结果且焦点不在输入框时生效。
+     */
+    public boolean handleRemoteKey(KeyEvent event) {
+        if (resultList == null || adapter == null || resultListData.size() == 0) {
+            return false;
+        }
+        if (event.getAction() != KeyEvent.ACTION_DOWN) {
+            return false;
+        }
+        // 数字键在输入框聚焦时保留给输入法（避免输入数字被拦截），
+        // 方向键/OK 始终用于列表导航
+        int action = KeyBindingUtil.classify(event.getKeyCode());
+        if (searchEdit != null && searchEdit.hasFocus()) {
+            if (action == KeyBindingUtil.ACTION_UP
+                    || action == KeyBindingUtil.ACTION_DOWN
+                    || action == KeyBindingUtil.ACTION_CONFIRM) {
+                // 放行：在输入框聚焦时也能用方向键/OK 操作列表
+            } else {
+                return false;
+            }
+        }
+        if (action != KeyBindingUtil.ACTION_UP
+                && action != KeyBindingUtil.ACTION_DOWN
+                && action != KeyBindingUtil.ACTION_CONFIRM
+                && action != KeyBindingUtil.ACTION_NUM_2
+                && action != KeyBindingUtil.ACTION_NUM_8) {
+            return false;
+        }
+        if (selectedPosition < 0) {
+            selectedPosition = 0;
+        }
+        // 按键恢复：先取消触摸滑动时的隐藏，重新显示光标并滚回选中项，
+        // 让"焦点"回到遥控器接管的位置
+        if (adapter != null) {
+            adapter.setHideHighlight(false);
+        }
+        // 首次按下才移动光标；长按 repeat 只消费不移动，防止 ListView 内置滚动干扰
+        if (event.getRepeatCount() == 0) {
+            int count = resultListData.size();
+            if (action == KeyBindingUtil.ACTION_UP) {
+                selectedPosition = Math.max(0, selectedPosition - 1);
+            } else if (action == KeyBindingUtil.ACTION_DOWN) {
+                selectedPosition = Math.min(count - 1, selectedPosition + 1);
+            } else if (action == KeyBindingUtil.ACTION_NUM_2) {
+                selectedPosition = pageMove(-1);
+            } else if (action == KeyBindingUtil.ACTION_NUM_8) {
+                selectedPosition = pageMove(1);
+                if (selectedPosition >= count - 1) {
+                    loadMoreResults();
+                }
+            } else if (action == KeyBindingUtil.ACTION_CONFIRM) {
+                openResult(selectedPosition);
+                return true;
+            }
+            applySelection();
+        }
+        // 所有 DOWN 事件都消费（含长按 repeat），避免列表自身滚动导致"回顶"
+        return true;
+    }
+
+    /** 数字键 2/8：按一屏（当前可见项数）快速翻页。 */
+    private int pageMove(int direction) {
+        if (resultList == null) {
+            return selectedPosition;
+        }
+        int first = resultList.getFirstVisiblePosition();
+        int last = resultList.getLastVisiblePosition();
+        int visibleCount = Math.max(1, last - first + 1);
+        int newPos = selectedPosition + direction * visibleCount;
+        int count = resultListData.size();
+        if (newPos < 0) {
+            newPos = 0;
+        } else if (newPos >= count) {
+            newPos = count - 1;
+        }
+        return newPos;
+    }
+
+    private void applySelection() {
+        if (adapter != null) {
+            adapter.setSelectedPosition(selectedPosition);
+        }
+        if (resultList != null) {
+            resultList.setSelection(selectedPosition);
+        }
+    }
+
+    /** 打开搜索结果列表第 position 项（视频详情或动态详情）。 */
+    private void openResult(int position) {
+        if (position < 0 || position >= resultListData.size()) {
+            return;
+        }
+        SearchResultItem item = resultListData.get(position);
+        if (item == null) {
+            return;
+        }
+        if (item.isBlog) {
+            Intent intent = new Intent(SearchActivity.this, BlogDetailActivity.class);
+            intent.putExtra("bid", item.aid);
+            intent.putExtra("title", item.title != null
+                    ? item.title.replace("[动态] ", "") : ("ob" + item.aid));
+            intent.putExtra("content", item.blogContent);
+            intent.putExtra("username", item.author);
+            intent.putExtra("time", item.blogTime);
+            startActivity(intent);
+            return;
+        }
+        Intent intent = new Intent(SearchActivity.this, VideoDetailActivity.class);
+        if (item.aid != 0) {
+            intent.putExtra("aid", item.aid);
+        } else if (item.bvid != null && item.bvid.length() > 0) {
+            intent.putExtra("bvid", item.bvid);
+        } else {
+            Toast.makeText(SearchActivity.this,
+                    getString(R.string.searchactivity_toast_65e0), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startActivity(intent);
+    }
+
+    public static class SearchResultItem {
+        public String title;
+        public String cover;
+        public String author;
+        public int play;
+        public int danmaku;
+        public long aid;
+        public String bvid;
+        public boolean isBlog;
+        public String blogContent;
+        public String blogTime;
+    }
+}

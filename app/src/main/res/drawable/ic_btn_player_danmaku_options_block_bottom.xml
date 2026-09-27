@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android" android:variablePadding="false">
+    <item android:state_checked="true">
+        <layer-list>
+            <item
+                android:drawable="@drawable/ic_player_danmaku_input_options_bottom_type"
+                android:right="4dp"
+                android:bottom="5dp"/>
+            <item>
+                <bitmap
+                    android:gravity="bottom|right"
+                    android:src="@drawable/ic_options_ban"/>
+            </item>
+        </layer-list>
+    </item>
+    <item>
+        <layer-list>
+            <item
+                android:drawable="@drawable/ic_player_danmaku_input_options_bottom_type"
+                android:right="4dp"
+                android:bottom="5dp"/>
+        </layer-list>
+    </item>
+</selector>
